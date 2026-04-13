@@ -16,7 +16,16 @@ Checks: "*,\
   -readability-redundant-access-specifiers,\
   -cppcoreguidelines-non-private-member-variables-in-classes, \
   -misc-non-private-member-variables-in-classes, \
-  -misc-use-anonymous-namespace"
+  -misc-use-anonymous-namespace, \
+  -readability-identifier-length, \
+  -cppcoreguidelines-avoid-magic-numbers, \
+  -readability-magic-numbers, \
+  -readability-uppercase-literal-suffix, \
+  -hicpp-uppercase-literal-suffix, \
+  -hicpp-uppercase-literal-suffix, \
+  -hicpp-vararg, \
+  -cppcoreguidelines-pro-type-vararg, \
+  -hicpp-signed-bitwise"
 WarningsAsErrors: ''
 CheckOptions:
   - key: 'bugprone-argument-comment.StrictMode'
@@ -71,7 +80,9 @@ CheckOptions:
     value: 'camelBack'
   - key: 'readability-identifier-naming.ConstexprMethodCase'
     value: 'camelBack'
-  - key: 'readability-identifier-naming.ConstexprVariableCase'
+  - key: 'readability-identifier-naming.GlobalConstexprVariableCase'
+    value: 'UPPER_CASE'
+  - key: 'readability-identifier-naming.LocalConstexprVariableCase'
     value: 'camelBack'
   - key: 'readability-identifier-naming.EnumCase'
     value: 'CamelCase'
@@ -134,7 +145,7 @@ CheckOptions:
   - key: 'readability-identifier-naming.StaticConstantCase'
     value: 'UPPER_CASE'
   - key: 'readability-identifier-naming.StaticVariableCase'
-    value: 'CamelCase'
+    value: 'camelBack'
   - key: 'readability-identifier-naming.StructCase'
     value: 'CamelCase'
   - key: 'readability-identifier-naming.TemplateParameterCase'
