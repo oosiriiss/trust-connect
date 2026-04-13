@@ -48,6 +48,8 @@ add_executable(
    client-app
    src/client.cpp
    ./src/ui/window.hpp
+   src/client/application.hpp
+   src/client/application.cpp
 )
 
 add_executable(

@@ -1,17 +1,21 @@
 #include "crypto.hpp"
 #include "logzy/logzy.hpp"
-#include "network.hpp"
-#include <print>
+#include <cstdlib>
+#include <unistd.h>
 
-int main(int argc, const char *const *const argv) {
+auto main(int  /*argc*/, const char *const *const  /*argv*/) -> int {
 
-  auto id = crypto::generateRandomId("User");
+  crypto::Hash32 id{};
 
-  if (!id) {
-    logzy::critical("Couldn't generate ID for client. Reason: {}", id.error());
+  if (auto idExp = crypto::generateRandomId("Server")) {
+    id = *idExp;
+  } else {
+    logzy::critical("Couldn't generate ID for client. Reason: {}",
+                    idExp.error());
+    return EXIT_FAILURE;
   }
 
-  logzy::info("Generated Server ID: {}", crypto::hashToHex(*id));
+  logzy::info("Generated Server ID: {}", crypto::hashToHex(id));
 
-  return 0;
+  return EXIT_SUCCESS;
 }

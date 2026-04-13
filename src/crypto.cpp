@@ -10,7 +10,7 @@
 namespace crypto {
 
 template <std::size_t Bytes>
-[[nodiscard]] auto generateRandomBytes() noexcept
+[[nodiscard]] static auto generateRandomBytes() noexcept
     -> std::expected<static_string<Bytes>, std::string> {
 
   std::expected<static_string<Bytes>, std::string> output{
@@ -62,12 +62,13 @@ template std::expected<Hash32, std::string> generateRandomBytes<32>();
 
   logzy::trace("Generating random ID for: {}", seed);
 
-  const auto randomBytes = generateRandomBytes<32>();
+  auto randomBytes = generateRandomBytes<32>();
   if (!randomBytes) {
     return std::unexpected(std::format(
         "generateRandomId :: Generating random 32 bytes failed. Reason {}",
         randomBytes.error()));
   }
+
   std::string buffer;
   buffer.reserve(64);
   buffer.append(seed);
@@ -80,7 +81,8 @@ template std::expected<Hash32, std::string> generateRandomBytes<32>();
 [[nodiscard]] auto hashToHex(const Hash32 &hash) noexcept -> std::string {
 
   static_assert(hash.size() == 32);
-  std::string out(hash.size() * 2, '\0');
+  std::string out;
+  out.reserve(hash.size() * 2);
 
   for (auto byte : hash) {
     out += std::format("{:02x}", byte);
