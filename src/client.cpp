@@ -1,4 +1,6 @@
 
+#include "crypto.hpp"
+#include "ui/window.hpp"
 #include <cstdlib>
 #include <print>
 #define GLFW_INCLUDE_NONE
@@ -7,6 +9,7 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include <GLFW/glfw3.h>
+#include <logzy/logzy.hpp>
 
 static void glfwErrorCallback(int /*error*/, const char *description) {
   std::println(stderr, "Error: {}", description);
@@ -57,7 +60,14 @@ auto main() -> int {
 
   ImGui_ImplOpenGL3_Init(GLSL_VERSION);
 
-  ImVec4 clearColor = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
+  ImVec4 clearColor = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
+
+  auto id = crypto::generateRandomId("User");
+
+  if (!id) {
+    logzy::critical("Couldn't generate ID for client. Reason: {}", id.error());
+  }
+  logzy::info("Generated Client ID: {}", crypto::hashToHex(*id));
 
   while (glfwWindowShouldClose(window) == 0) {
     glfwPollEvents();
@@ -71,10 +81,8 @@ auto main() -> int {
     ImGui::NewFrame();
 
     {
-
-      ImGui::Begin("Hello, world!");
+      auto fsWindow = FullScreenWindow("Hello!");
       ImGui::Text("Hello");
-      ImGui::End();
     }
 
     // Rendering
