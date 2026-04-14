@@ -3,6 +3,7 @@
 #include "crypto.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
+#include "network.hpp"
 #include "ui/window.hpp"
 #include <GLFW/glfw3.h>
 #include <cstdlib>
@@ -33,8 +34,22 @@ auto main() -> int {
     return EXIT_FAILURE;
   }
 
-  AppState state{};
+  const char *host = "127.0.0.1";
+  std::uint16_t port = network::TcpServer::DEFAULT_SERVER_LISTEN_PORT;
 
+  logzy::trace("Connecting to server: {}:{}", host, port);
+  network::TcpSocket clientSocket;
+  if (auto socketExp = network::TcpSocket::connect(host, port)) {
+
+    clientSocket = std::move(*socketExp);
+
+  } else {
+    logzy::critical("Couldn't create client socket. Reason: {}",
+                    socketExp.error());
+    return EXIT_FAILURE;
+  }
+
+  AppState state{};
   while (glfwWindowShouldClose(ctx.window) == 0) {
 
     if (!beginFrame(ctx)) {
@@ -67,6 +82,26 @@ auto main() -> int {
 
       if (!state.errorMessage.empty()) {
         ImGui::Text("Error: %s", state.errorMessage.c_str());
+      }
+
+      if (ImGui::Button("Send data")) {
+        if (auto err = clientSocket.send("Hello")) {
+          logzy::error("Couldn't send data: {}", *err);
+        }
+      }
+
+      if (ImGui::Button("Receive data")) {
+        if (auto received = clientSocket.receive()) {
+          logzy::info("Received: ", *received);
+
+          if (received->empty()) {
+            logzy::info("Client disconnected");
+            break;
+          }
+        } else {
+          logzy::error("Couldn't receive message from server: {}",
+                       received.error());
+        }
       }
     }
 
