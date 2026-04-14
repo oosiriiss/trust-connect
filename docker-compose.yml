@@ -1,0 +1,21 @@
+services:
+  ttp:
+    build:
+      context: .           
+      dockerfile: docker/Dockerfile
+      args:
+        TARGET_NAME: ttp-app
+    container_name: ttp
+    
+  server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        TARGET_NAME: server-app
+    container_name: server
+    ports:
+      - "6600:6600"
+    depends_on:
+      ttp:
+        condition: service_started 

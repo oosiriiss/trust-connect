@@ -92,7 +92,7 @@ auto main() -> int {
 
       if (ImGui::Button("Receive data")) {
         if (auto received = clientSocket.receive()) {
-          logzy::info("Received: ", *received);
+          logzy::info("Received: {}", *received);
 
           if (received->empty()) {
             logzy::info("Client disconnected");

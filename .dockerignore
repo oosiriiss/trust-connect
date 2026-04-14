@@ -1,0 +1,12 @@
+build/
+.git
+.cmake/
+cmake-build
+.gitattributes
+.gitignore
+README.md
+docs
+test
+.cache
+.clangd
+.clang-tidy

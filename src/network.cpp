@@ -97,7 +97,6 @@ auto TcpSocket::connect(const std::string &host, std::uint16_t port) noexcept
   logzy::trace("Receiving...");
 
   std::expected<ReceivePacket, std::string> packet{std::string{}};
-
   size_t received = 0;
 
   std::array<std::uint8_t, 256> buffer{};
