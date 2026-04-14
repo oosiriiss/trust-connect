@@ -2,12 +2,13 @@
 #include "client/application.hpp"
 #include "crypto.hpp"
 #include "imgui.h"
-#include "imgui_impl_glfw.h"
 #include "network.hpp"
 #include "ui/window.hpp"
 #include <GLFW/glfw3.h>
 #include <cstdlib>
 #include <logzy/logzy.hpp>
+
+#include <cppli/cppli.hpp>
 
 namespace {
 
@@ -24,22 +25,25 @@ struct AppState {
 };
 } // namespace
 
-auto main() -> int {
+auto main(int argc, char const *const *const argv) -> int {
 
   AppContext ctx;
 
-  if (auto ctxOpt = initialize()) {
+  bool terminate = false;
+
+  if (auto ctxOpt = initialize(argc, argv, terminate)) {
     ctx = *ctxOpt;
   } else {
+    if (terminate) {
+      return EXIT_SUCCESS;
+    }
     return EXIT_FAILURE;
   }
 
-  const char *host = "127.0.0.1";
-  std::uint16_t port = network::TcpServer::DEFAULT_SERVER_LISTEN_PORT;
-
-  logzy::trace("Connecting to server: {}:{}", host, port);
+  logzy::trace("Connecting to server: {}:{}", ctx.serverIp, ctx.serverPort);
   network::TcpSocket clientSocket;
-  if (auto socketExp = network::TcpSocket::connect(host, port)) {
+  if (auto socketExp =
+          network::TcpSocket::connect(ctx.serverIp, ctx.serverPort)) {
 
     clientSocket = std::move(*socketExp);
 

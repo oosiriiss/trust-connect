@@ -15,6 +15,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(FetchContent)
 
+FetchContent_Declare(
+   cppli
+   GIT_REPOSITORY https://github.com/oosiriiss/cppli
+   GIT_TAG 44b96701812803d2b5171bafa56120fb20852c08 # 0.2.1
+)
+FetchContent_MakeAvailable(cppli)
 
 
 FetchContent_Declare(
@@ -69,7 +75,7 @@ endif()
 message(STATUS "OpenSSL include dir: ${OPENSSL_INCLUDE_DIR}")
 message(STATUS "OpenSSL libs: ${OPENSSL_LIBRARIES}")
 
-target_link_libraries(shared-lib PUBLIC OpenSSL::SSL OpenSSL::Crypto logzy::logzy)
+target_link_libraries(shared-lib PUBLIC OpenSSL::SSL OpenSSL::Crypto logzy::logzy cppli::cppli)
 target_link_libraries(ttp-app PRIVATE shared-lib)
 target_link_libraries(server-app PRIVATE shared-lib)
 

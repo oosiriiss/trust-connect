@@ -1,5 +1,6 @@
 #pragma once
 
+#include "constants.hpp"
 #include <cstdint>
 #include <expected>
 #include <optional>
@@ -42,7 +43,6 @@ private:
 
 struct TcpServer {
   static constexpr int MAX_CONNECTIONS = 4;
-  static constexpr std::uint16_t DEFAULT_SERVER_LISTEN_PORT = 6600;
 
 public:
   TcpServer() = default;
@@ -52,7 +52,8 @@ public:
   TcpServer &operator=(const TcpServer &) = delete; // NOLINT
   TcpServer &operator=(TcpServer &&) = delete;      // NOLINT
 
-  [[nodiscard]] auto listen(std::uint16_t port = DEFAULT_SERVER_LISTEN_PORT)
+  [[nodiscard]] auto
+  listen(std::uint16_t port = DEFAULT_SERVER_PORT)
       -> std::optional<std::string>;
   [[nodiscard]] auto accept() const -> std::expected<TcpSocket, std::string>;
 

@@ -26,7 +26,3 @@ WORKDIR /app
 ARG TARGET_NAME
 
 COPY --from=builder /src/build/${TARGET_NAME} /app/appexe
-
-CMD ["./appexe"]
-
-

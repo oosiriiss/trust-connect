@@ -6,7 +6,10 @@ services:
       args:
         TARGET_NAME: ttp-app
     container_name: ttp
-    
+    ports:
+      - "6601:6600"
+    command: ["./appexe", "--port=6600"]
+
   server:
     build:
       context: .
@@ -19,3 +22,4 @@ services:
     depends_on:
       ttp:
         condition: service_started 
+    command: ["./appexe", "--port=6600"]
