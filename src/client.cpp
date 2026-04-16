@@ -2,7 +2,7 @@
 #include "client/application.hpp"
 #include "crypto.hpp"
 #include "imgui.h"
-#include "network.hpp"
+#include "network/socket.hpp"
 #include "ui/window.hpp"
 #include <GLFW/glfw3.h>
 #include <cstdlib>

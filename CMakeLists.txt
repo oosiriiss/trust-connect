@@ -30,15 +30,21 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(logzy)
 
+FetchContent_Declare(
+   nlohmann_json
+   GIT_REPOSITORY https://github.com/nlohmann/json
+   GIT_TAG 55f93686c01528224f448c19128836e7df245f72 # 3.12.0
+)
+FetchContent_MakeAvailable(nlohmann_json)
+
 
 find_package(OpenSSL REQUIRED)
 
 
 add_library(
    shared-lib
-
-   src/network.cpp
-   src/network.hpp
+   src/network/socket.hpp
+   src/network/socket.cpp
    src/crypto.hpp
    src/crypto.cpp
 )
@@ -75,7 +81,7 @@ endif()
 message(STATUS "OpenSSL include dir: ${OPENSSL_INCLUDE_DIR}")
 message(STATUS "OpenSSL libs: ${OPENSSL_LIBRARIES}")
 
-target_link_libraries(shared-lib PUBLIC OpenSSL::SSL OpenSSL::Crypto logzy::logzy cppli::cppli)
+target_link_libraries(shared-lib PUBLIC OpenSSL::SSL OpenSSL::Crypto logzy::logzy cppli::cppli nlohmann_json::nlohmann_json)
 target_link_libraries(ttp-app PRIVATE shared-lib)
 target_link_libraries(server-app PRIVATE shared-lib)
 

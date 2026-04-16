@@ -2,7 +2,7 @@
 #include "cppli/cppli.hpp"
 #include "crypto.hpp"
 #include "logzy/logzy.hpp"
-#include "network.hpp"
+#include "network/socket.hpp"
 #include <cstdlib>
 #include <unistd.h>
 

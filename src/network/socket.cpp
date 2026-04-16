@@ -1,6 +1,7 @@
-#include "network.hpp"
+
 #include "debug_utils.hpp"
 #include "logzy/logzy.hpp"
+#include "network/socket.hpp"
 #include <arpa/inet.h>
 #include <expected>
 #include <netdb.h>
