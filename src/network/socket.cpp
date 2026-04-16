@@ -1,7 +1,8 @@
 
+#include "network/socket.hpp"
 #include "debug_utils.hpp"
 #include "logzy/logzy.hpp"
-#include "network/socket.hpp"
+#include "network/packet.hpp"
 #include <arpa/inet.h>
 #include <expected>
 #include <netdb.h>
@@ -64,14 +65,22 @@ auto TcpSocket::connect(const std::string &host, std::uint16_t port) noexcept
   return socket;
 }
 
-[[nodiscard]] auto TcpSocket::send(SendPacket packet) const noexcept
+[[nodiscard]] auto TcpSocket::send(const Packet &packet) const noexcept
     -> std::optional<std::string> {
 
   logzy::trace("Sending: {}", packet);
 
-  size_t packetBytesLeft = packet.size() * sizeof(SendPacket::value_type);
+  std::string dataToSend;
+
+  if (auto serialized = encode(packet)) {
+    dataToSend = std::move(*serialized);
+  } else {
+    return std::optional<std::string>(std::move(serialized.error()));
+  }
+
+  size_t packetBytesLeft = dataToSend.size() * sizeof(packet);
   const auto *dataPtr =
-      reinterpret_cast<const std::uint8_t *>(packet.data()); // NOLINT
+      reinterpret_cast<const std::uint8_t *>(dataToSend.data()); // NOLINT
 
   size_t sent = 0;
   while (sent < packetBytesLeft) {
@@ -94,20 +103,22 @@ auto TcpSocket::connect(const std::string &host, std::uint16_t port) noexcept
 }
 
 [[nodiscard]] auto TcpSocket::receive() const noexcept
-    -> std::expected<ReceivePacket, std::string> {
+    -> std::expected<Packet, std::string> {
   logzy::trace("Receiving...");
 
-  std::expected<ReceivePacket, std::string> packet{std::string{}};
+  std::expected<Packet, std::string> packet{Packet{}};
   size_t received = 0;
 
-  std::array<std::uint8_t, 256> buffer{};
+  std::string receivedData;
+
+  std::array<char, 256> buffer{};
 
   while (true) {
     ssize_t read = ::recv(fd_, buffer.data(), buffer.size(), 0);
 
     if (read > 0) {
 
-      packet->append(std::string_view{
+      receivedData.append(std::string_view{
           reinterpret_cast<const char *>(buffer.data()), // NOLINT
           static_cast<size_t>(read)});
 
@@ -116,7 +127,8 @@ auto TcpSocket::connect(const std::string &host, std::uint16_t port) noexcept
       }
 
     } else if (read == 0) { // Graceful closed connection
-      return *packet = "";
+      return std::expected<Packet, std::string>{
+          Packet{.type = PacketType::CloseConnection}};
     } else {
       if (errno == EINTR) {
         continue;
@@ -129,8 +141,7 @@ auto TcpSocket::connect(const std::string &host, std::uint16_t port) noexcept
     }
   }
 
-  logzy::trace("Successfully received:{}", *packet);
-  return packet;
+  return decode(receivedData);
 }
 
 //

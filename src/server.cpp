@@ -2,6 +2,7 @@
 #include "cppli/cppli.hpp"
 #include "crypto.hpp"
 #include "logzy/logzy.hpp"
+#include "network/packet.hpp"
 #include "network/socket.hpp"
 #include <cstdlib>
 #include <unistd.h>
@@ -103,13 +104,18 @@ auto main(int argc, const char *const *const argv) -> int {
     if (auto received = client->receive()) {
       logzy::info("Received: {}", *received);
 
-      if (received->empty()) {
-        logzy::info("Client disconnected");
+      if (received->type == network::PacketType::CloseConnection) {
         break;
       }
 
+      nlohmann::json payload;
+      payload["value_response"] = received->payload["value"];
+      auto packet =
+          network::Packet{.type = network::PacketType::RegisterResponse,
+                          .payload = std::move(payload)};
+
       // Echo
-      if (auto err = client->send(*received)) {
+      if (auto err = client->send(packet)) {
         logzy::error("Couldn't send send echo messge to client. {}", *err);
       }
     } else {

@@ -2,6 +2,7 @@
 #include "client/application.hpp"
 #include "crypto.hpp"
 #include "imgui.h"
+#include "network/packet.hpp"
 #include "network/socket.hpp"
 #include "ui/window.hpp"
 #include <GLFW/glfw3.h>
@@ -89,7 +90,11 @@ auto main(int argc, char const *const *const argv) -> int {
       }
 
       if (ImGui::Button("Send data")) {
-        if (auto err = clientSocket.send("Hello")) {
+        nlohmann::json payload;
+        payload["value"] = "Hello";
+        if (auto err = clientSocket.send(
+                network::Packet{.type = network::PacketType::RegisterRequest,
+                                .payload = std::move(payload)})) {
           logzy::error("Couldn't send data: {}", *err);
         }
       }
@@ -98,10 +103,18 @@ auto main(int argc, char const *const *const argv) -> int {
         if (auto received = clientSocket.receive()) {
           logzy::info("Received: {}", *received);
 
-          if (received->empty()) {
+          switch (received->type) {
+          case network::PacketType::RegisterResponse:
+            break;
+          case network::PacketType::CloseConnection:
             logzy::info("Client disconnected");
+            glfwSetWindowShouldClose(ctx.window, 1);
+            break;
+          default:
+            logzy::error("Invalid packet received: {}", received->type);
             break;
           }
+
         } else {
           logzy::error("Couldn't receive message from server: {}",
                        received.error());

@@ -45,6 +45,8 @@ add_library(
    shared-lib
    src/network/socket.hpp
    src/network/socket.cpp
+   src/network/packet.hpp
+   src/network/packet.cpp
    src/crypto.hpp
    src/crypto.cpp
 )
@@ -75,6 +77,8 @@ endif()
 
 if(ENABLE_DEBUG_UTILS)
     target_compile_definitions(shared-lib PUBLIC ENABLE_DEBUG_UTILS)
+    target_compile_definitions(ttp-app PUBLIC ENABLE_DEBUG_UTILS)
+    target_compile_definitions(server-app PUBLIC ENABLE_DEBUG_UTILS)
 endif()
 
 
@@ -107,6 +111,7 @@ if(BUILD_CLIENT)
       src/client/application.cpp
    )
    target_compile_features(client-app PUBLIC cxx_std_23)
+   target_compile_definitions(client-app PUBLIC ENABLE_DEBUG_UTILS)
 
    target_link_libraries(client-app PRIVATE shared-lib imgui glfw OpenGL::GL glad)
 endif()
