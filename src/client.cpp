@@ -1,6 +1,6 @@
 
 #include "client/application.hpp"
-#include "crypto.hpp"
+#include "crypto/crypto.hpp"
 #include "imgui.h"
 #include "network/packet.hpp"
 #include "network/socket.hpp"

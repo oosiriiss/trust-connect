@@ -1,14 +1,10 @@
-#include "crypto.hpp"
-
+#include "hash.hpp"
 #include "debug_utils.hpp"
-#include "logzy/logzy.hpp"
-#include <expected>
-#include <openssl/evp.h>
+
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
 
 namespace crypto {
-
 template <std::size_t Bytes>
 [[nodiscard]] static auto generateRandomBytes() noexcept
     -> std::expected<static_string<Bytes>, std::string> {
@@ -57,27 +53,6 @@ template std::expected<Hash32, std::string> generateRandomBytes<32>();
   return output;
 }
 
-[[nodiscard]] auto generateRandomId(std::string_view seed) noexcept
-    -> std::expected<Hash32, std::string> {
-
-  logzy::trace("Generating random ID for: {}", seed);
-
-  auto randomBytes = generateRandomBytes<32>();
-  if (!randomBytes) {
-    return std::unexpected(std::format(
-        "generateRandomId :: Generating random 32 bytes failed. Reason {}",
-        randomBytes.error()));
-  }
-
-  std::string buffer;
-  buffer.reserve(64);
-  buffer.append(seed);
-  buffer.append(
-      std::string_view{randomBytes->data.begin(), randomBytes->data.end()});
-
-  return sha256(buffer);
-}
-
 [[nodiscard]] auto hashToHex(const Hash32 &hash) noexcept -> std::string {
 
   static_assert(hash.size() == 32);
@@ -90,5 +65,4 @@ template std::expected<Hash32, std::string> generateRandomBytes<32>();
 
   return out;
 }
-
 } // namespace crypto

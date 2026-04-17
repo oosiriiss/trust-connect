@@ -43,12 +43,18 @@ find_package(OpenSSL REQUIRED)
 
 add_library(
    shared-lib
+
    src/network/socket.hpp
    src/network/socket.cpp
    src/network/packet.hpp
    src/network/packet.cpp
-   src/crypto.hpp
-   src/crypto.cpp
+
+   src/crypto/crypto.hpp
+   src/crypto/crypto.cpp
+   src/crypto/hash.hpp
+   src/crypto/hash.cpp
+   src/crypto/openssl.hpp
+   src/crypto/openssl.cpp
 )
 
 add_executable(

@@ -1,6 +1,6 @@
 #include "constants.hpp"
 #include "cppli/cppli.hpp"
-#include "crypto.hpp"
+#include "crypto/crypto.hpp"
 #include "logzy/logzy.hpp"
 #include "network/packet.hpp"
 #include "network/socket.hpp"
