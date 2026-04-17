@@ -58,7 +58,6 @@ void RsaKeyDeleter::operator()(RsaKey *key) const noexcept {
 }; // namespace internal
 
 namespace internal {
-using Bio = struct ::bio_st;
 void BioDeleter::operator()(Bio *bio) const noexcept {
   if (bio == nullptr) {
     return;
@@ -68,6 +67,15 @@ void BioDeleter::operator()(Bio *bio) const noexcept {
 }
 
 } // namespace internal
-using BioPointer = std::unique_ptr<internal::Bio, internal::BioDeleter>;
 
+namespace internal {
+void CtxDeleter::operator()(Ctx *ctx) const noexcept {
+  if (ctx == nullptr) {
+    return;
+  }
+
+  ::EVP_PKEY_CTX_free(ctx);
+}
+
+} // namespace internal
 } // namespace crypto::openssl

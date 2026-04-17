@@ -24,6 +24,12 @@ public:
   [[nodiscard]] auto privateKeyPem() const
       -> std::expected<std::string, std::string>;
 
+  [[nodiscard]] auto encryptPublic(std::string_view plain) const
+      -> std::expected<std::string, std::string>;
+
+  [[nodiscard]] auto decryptPrivate(std::string_view cipher) const
+      -> std::expected<std::string, std::string>;
+
   openssl::RsaKeyPointer rawKey{nullptr};
 };
 

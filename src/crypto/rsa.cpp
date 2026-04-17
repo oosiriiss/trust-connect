@@ -94,8 +94,6 @@ auto RsaKeyPair::fromPrivatePem(std::string_view privatePem)
 
 auto RsaKeyPair::publicKeyPem() const
     -> std::expected<std::string, std::string> {
-  auto bio = openssl::BioPointer{BIO_new(BIO_s_mem()),
-                                 openssl::internal::BioDeleter{}};
   auto bio = openssl::BioPointer{BIO_new(BIO_s_mem())};
   if (bio == nullptr) {
     return std::unexpected("Couldn't create BIO from public key PEM: " +
@@ -148,6 +146,109 @@ auto RsaKeyPair::privateKeyPem() const
   BIO_get_mem_ptr(bio.get(), &bufMem);
   pem->append(bufMem->data, bufMem->length);
   return pem;
+}
+
+[[nodiscard]] auto RsaKeyPair::encryptPublic(std::string_view plain) const
+    -> std::expected<std::string, std::string> {
+  logzy::trace("Encrypting: '{}'", plain);
+
+  auto ctx = openssl::CtxPointer{EVP_PKEY_CTX_new(rawKey.get(), nullptr)};
+  if (ctx == nullptr) {
+    return std::unexpected(std::string("Couldn't create context to decrypt"));
+  }
+
+  if (EVP_PKEY_encrypt_init(ctx.get()) <= 0) {
+    return std::unexpected(
+        std::format("Couldnt initialize encryption. {}", openssl::getError()));
+  }
+
+  if (EVP_PKEY_CTX_set_rsa_padding(ctx.get(), RSA_PKCS1_OAEP_PADDING) <= 0) {
+    return std::unexpected(std::format("Couldnt set padding for encryption. {}",
+                                       openssl::getError()));
+  }
+
+  if (EVP_PKEY_CTX_set_rsa_oaep_md(ctx.get(), EVP_sha256()) <= 0) {
+    return std::unexpected(std::format("Couldn't set padding hash function. {}",
+                                       openssl::getError()));
+  }
+
+  size_t resultLength = 0;
+
+  if (EVP_PKEY_encrypt(
+          ctx.get(), nullptr, &resultLength,
+          reinterpret_cast<const unsigned char *>(plain.data()), // NOLINT
+          plain.size()) <= 0) {
+    return std::unexpected(
+        std::format("Encryption size query failed. {}", openssl::getError()));
+  }
+  // 5 because why not
+  std::string buffer(resultLength + 5, '\0');
+
+  if (EVP_PKEY_encrypt(
+          ctx.get(),
+          reinterpret_cast<unsigned char *>(buffer.data()), // NOLINT
+          &resultLength,
+          reinterpret_cast<const unsigned char *>(plain.data()), // NOLINT
+          plain.size()) <= 0) {
+    return std::unexpected(
+        std::format("Encryption failed. {}", openssl::getError()));
+  }
+
+  buffer.resize(resultLength);
+  logzy::trace("Encrypted: '{}'", buffer);
+
+  return buffer;
+}
+
+[[nodiscard]] auto RsaKeyPair::decryptPrivate(std::string_view cipher) const
+    -> std::expected<std::string, std::string> {
+  logzy::trace("Decrypting: '{}'", cipher);
+
+  auto ctx = openssl::CtxPointer{EVP_PKEY_CTX_new(rawKey.get(), nullptr)};
+  if (ctx == nullptr) {
+    return std::unexpected(std::string("Couldn't create context to decrypt"));
+  }
+
+  if (EVP_PKEY_decrypt_init(ctx.get()) <= 0) {
+    return std::unexpected(
+        std::format("Couldnt initialize encryption. {}", openssl::getError()));
+  }
+
+  if (EVP_PKEY_CTX_set_rsa_padding(ctx.get(), RSA_PKCS1_OAEP_PADDING) <= 0) {
+    return std::unexpected(std::format("Couldnt set padding for encryption. {}",
+                                       openssl::getError()));
+  }
+
+  if (EVP_PKEY_CTX_set_rsa_oaep_md(ctx.get(), EVP_sha256()) <= 0) {
+    return std::unexpected(std::format("Couldn't set padding hash function. {}",
+                                       openssl::getError()));
+  }
+
+  size_t resultLength = 0;
+
+  if (EVP_PKEY_decrypt(
+          ctx.get(), nullptr, &resultLength,
+          reinterpret_cast<const unsigned char *>(cipher.data()), // NOLINT
+          cipher.size()) <= 0) {
+    return std::unexpected(
+        std::format("Decryption size query failed. {}", openssl::getError()));
+  }
+  // 5 because why not
+  std::string buffer(resultLength + 5, '\0');
+
+  if (EVP_PKEY_decrypt(
+          ctx.get(),
+          reinterpret_cast<unsigned char *>(buffer.data()), // NOLINT
+          &resultLength,
+          reinterpret_cast<const unsigned char *>(cipher.data()), // NOLINT
+          cipher.size()) <= 0) {
+    return std::unexpected(
+        std::format("Decryption failed. {}", openssl::getError()));
+  }
+  buffer.resize(resultLength);
+  logzy::trace("Decrypted: '{}'", buffer);
+
+  return buffer;
 }
 
 } // namespace crypto
