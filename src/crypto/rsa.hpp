@@ -14,6 +14,11 @@ public:
   [[nodiscard]] static auto generate()
       -> std::expected<RsaKeyPair, std::string>;
 
+  [[nodiscard]] static auto fromPrivatePem(std::string_view privatePem)
+      -> std::expected<RsaKeyPair, std::string>;
+  [[nodiscard]] static auto fromPublicPem(std::string_view publicPem)
+      -> std::expected<RsaKeyPair, std::string>;
+
   [[nodiscard]] auto publicKeyPem() const
       -> std::expected<std::string, std::string>;
   [[nodiscard]] auto privateKeyPem() const

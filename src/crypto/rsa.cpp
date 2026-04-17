@@ -1,5 +1,6 @@
 #include "rsa.hpp"
 #include "crypto/openssl.hpp"
+#include "logzy/logzy.hpp"
 #include <expected>
 #include <openssl/bio.h>
 #include <openssl/evp.h>
@@ -21,10 +22,81 @@ auto RsaKeyPair::generate() -> std::expected<RsaKeyPair, std::string> {
           openssl::RsaKeyPointer{key, openssl::internal::RsaKeyDeleter{}}}};
 }
 
+auto RsaKeyPair::fromPublicPem(std::string_view publicPem)
+    -> std::expected<RsaKeyPair, std::string> {
+
+  logzy::trace("Creating RSA keypair from public key");
+  if (publicPem.empty()) {
+    return std::unexpected(std::string("public PEM is empty"));
+  }
+
+  auto bio = openssl::BioPointer{
+      BIO_new_mem_buf(publicPem.data(), static_cast<int>(publicPem.size()))};
+
+  if (bio == nullptr) {
+    return std::unexpected(
+        std::string("Couldn't create BIO for the public key PEM"));
+  }
+  logzy::trace("BIO Created");
+
+  logzy::trace("Reading the public key");
+  EVP_PKEY *out = nullptr; // when out is nullptr openssl allocates
+                           // memory for the buf and returns it
+  constexpr pem_password_cb(*passphraseCallback) = nullptr;
+  constexpr void *callbackData = nullptr;
+  auto key = openssl::RsaKeyPointer{
+      PEM_read_bio_PUBKEY(bio.get(), &out, passphraseCallback, callbackData)};
+
+  if (key == nullptr) {
+    return std::unexpected(std::format(
+        "Couldn't create RSA keypair from public key PEM:\n {}", publicPem));
+  }
+
+  logzy::trace("RSA keypair parsed - only public key");
+  return RsaKeyPair{.rawKey = std::move(key)};
+}
+
+auto RsaKeyPair::fromPrivatePem(std::string_view privatePem)
+    -> std::expected<RsaKeyPair, std::string> {
+
+  logzy::trace("Creating RSA keypair from Private key");
+  if (privatePem.empty()) {
+    return std::unexpected(std::string("private PEM is empty"));
+  }
+
+  auto bio = openssl::BioPointer{
+      BIO_new_mem_buf(privatePem.data(), static_cast<int>(privatePem.size()))};
+
+  if (bio == nullptr) {
+    return std::unexpected(
+        std::string("Couldn't create BIO from the private key PEM"));
+  }
+
+  logzy::trace("BIO Created");
+
+  EVP_PKEY *out = nullptr; // when out is nullptr openssl allocates
+                           // memory for the buf and returns it
+  constexpr pem_password_cb(*passphraseCallback) = nullptr;
+  constexpr void *callbackData = nullptr;
+
+  logzy::trace("Reading the private key");
+  auto key = openssl::RsaKeyPointer{PEM_read_bio_PrivateKey(
+      bio.get(), &out, passphraseCallback, callbackData)};
+
+  if (key == nullptr) {
+    return std::unexpected(std::format(
+        "Couldn't create RSA keypair from private key PEM:\n {}", privatePem));
+  }
+
+  logzy::trace("RSA keypair parsed");
+  return RsaKeyPair{.rawKey = std::move(key)};
+}
+
 auto RsaKeyPair::publicKeyPem() const
     -> std::expected<std::string, std::string> {
   auto bio = openssl::BioPointer{BIO_new(BIO_s_mem()),
                                  openssl::internal::BioDeleter{}};
+  auto bio = openssl::BioPointer{BIO_new(BIO_s_mem())};
   if (bio == nullptr) {
     return std::unexpected("Couldn't create BIO from public key PEM: " +
                            openssl::getError());
@@ -47,8 +119,7 @@ auto RsaKeyPair::publicKeyPem() const
 
 auto RsaKeyPair::privateKeyPem() const
     -> std::expected<std::string, std::string> {
-  auto bio = openssl::BioPointer{BIO_new(BIO_s_mem()),
-                                 openssl::internal::BioDeleter{}};
+  auto bio = openssl::BioPointer{BIO_new(BIO_s_mem())};
   if (bio == nullptr) {
     return std::unexpected("Couldn't create BIO from private key PEM: " +
                            openssl::getError());
@@ -63,11 +134,12 @@ auto RsaKeyPair::privateKeyPem() const
   constexpr EVP_CIPHER *cipherFun = nullptr;
   constexpr const unsigned char *passphrase = nullptr;
   constexpr auto passphraseLength = 0;
-  constexpr int (*callback)(char *, int, int, void *) = nullptr;
+  constexpr pem_password_cb(*passphraseCallback) = nullptr;
   constexpr void *callbackData = nullptr;
 
   if (PEM_write_bio_PrivateKey(bio.get(), rawKey.get(), cipherFun, passphrase,
-                               passphraseLength, callback, callbackData) == 0) {
+                               passphraseLength, passphraseCallback,
+                               callbackData) == 0) {
     return std::unexpected("Couldn't write PEM from private key: " +
                            openssl::getError());
   }
