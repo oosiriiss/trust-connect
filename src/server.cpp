@@ -1,6 +1,7 @@
 #include "constants.hpp"
 #include "cppli/cppli.hpp"
 #include "crypto/crypto.hpp"
+#include "crypto/hash.hpp"
 #include "logzy/logzy.hpp"
 #include "network/packet.hpp"
 #include "network/socket.hpp"
@@ -9,8 +10,17 @@
 
 namespace {
 
+struct AppContext {
+  crypto::Hash32 id{};
+  std::uint16_t bindPort{network::DEFAULT_SERVER_PORT};
+  std::string ttpIp{network::DEFAULT_TTP_IP};
+  std::uint16_t ttpPort{network::DEFAULT_TTP_PORT};
+};
+
 enum class OptionKey {
-  Port,
+  BindPort,
+  TtpIp,
+  TtpPort,
   Help,
 };
 
@@ -18,11 +28,23 @@ auto getOptions() {
   cppli::OptionContainer<OptionKey> options;
 
   options.addOption(
-      OptionKey::Port,
+      OptionKey::BindPort,
       cppli::Option{.firstName = "-p",
                     .secondName = "--port",
                     .description =
                         "Specifies the port at which the server will listen on",
+                    .needsValue = true});
+  options.addOption(
+      OptionKey::TtpIp,
+      cppli::Option{.firstName = "-S",
+                    .secondName = "--ttp-ip",
+                    .description = "Specifies ip at which the TTP is located",
+                    .needsValue = true});
+  options.addOption(
+      OptionKey::TtpPort,
+      cppli::Option{.firstName = "-P",
+                    .secondName = "--ttp-port",
+                    .description = "Specifies port at which the TTP is located",
                     .needsValue = true});
   options.addOption(OptionKey::Help,
                     cppli::Option{.firstName = "-h",
@@ -33,7 +55,7 @@ auto getOptions() {
   return options;
 }
 
-auto parseCommandlineArgs(std::uint16_t &ctx, int argc,
+auto parseCommandlineArgs(AppContext &ctx, int argc,
                           char const *const *const argv) -> bool {
 
   cppli::OptionContainer<OptionKey> options = getOptions();
@@ -51,9 +73,17 @@ auto parseCommandlineArgs(std::uint16_t &ctx, int argc,
     return true;
   }
 
-  if (auto port = result.options.find(OptionKey::Port);
+  if (auto port = result.options.find(OptionKey::BindPort);
       port != result.options.end()) {
-    ctx = std::stoi(std::string(port->second.value.value()));
+    ctx.bindPort = std::stoi(std::string(port->second.value.value()));
+  }
+  if (auto ttpIp = result.options.find(OptionKey::TtpIp);
+      ttpIp != result.options.end()) {
+    ctx.ttpIp = ttpIp->second.value.value();
+  }
+  if (auto ttpPort = result.options.find(OptionKey::TtpPort);
+      ttpPort != result.options.end()) {
+    ctx.ttpPort = std::stoi(std::string(ttpPort->second.value.value()));
   }
 
   return false;
@@ -64,8 +94,10 @@ auto parseCommandlineArgs(std::uint16_t &ctx, int argc,
 auto main(int argc, const char *const *const argv) -> int {
 
   std::uint16_t port = network::DEFAULT_SERVER_PORT;
+  AppContext ctx{};
 
   if (parseCommandlineArgs(port, argc, argv)) {
+  if (parseCommandlineArgs(ctx, argc, argv)) {
     return EXIT_SUCCESS;
   }
 
@@ -74,16 +106,20 @@ auto main(int argc, const char *const *const argv) -> int {
   logzy::info("Generating server id");
   if (auto idExp = crypto::generateRandomId("Server")) {
     id = *idExp;
+    ctx.id = *idExp;
   } else {
     logzy::critical("Couldn't generate ID for client. Reason: {}",
                     idExp.error());
     return EXIT_FAILURE;
   }
   logzy::info("ID generated: {}", crypto::hashToHex(id));
+  logzy::info("ID generated: {}", crypto::hashToHex(ctx.id));
 
   logzy::info("Binding to port {}", port);
+  logzy::info("Binding to port {}", ctx.bindPort);
   network::TcpServer server;
   if (auto err = server.listen(port)) {
+  if (auto err = server.listen(ctx.bindPort)) {
     logzy::critical("Server listen failed. Reason: {}", *err);
     return EXIT_FAILURE;
   }
