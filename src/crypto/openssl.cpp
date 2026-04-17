@@ -1,6 +1,9 @@
 #include "openssl.hpp"
+#include <openssl/bio.h>
 #include <openssl/err.h>
+#include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <openssl/rsa.h>
 
 #include <array>
 #include <string_view>
@@ -44,5 +47,27 @@ template auto generateRandomBytes<32>()
     -> std::expected<static_string<32>, std::string>;
 template auto generateRandomBytes<64>()
     -> std::expected<static_string<64>, std::string>;
+
+namespace internal {
+void RsaKeyDeleter::operator()(RsaKey *key) const noexcept {
+  if (key == nullptr) {
+    return;
+  }
+  EVP_PKEY_free(key);
+}
+}; // namespace internal
+
+namespace internal {
+using Bio = struct ::bio_st;
+void BioDeleter::operator()(Bio *bio) const noexcept {
+  if (bio == nullptr) {
+    return;
+  }
+
+  BIO_free(bio);
+}
+
+} // namespace internal
+using BioPointer = std::unique_ptr<internal::Bio, internal::BioDeleter>;
 
 } // namespace crypto::openssl

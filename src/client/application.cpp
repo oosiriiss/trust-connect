@@ -1,6 +1,7 @@
 #include "cppli/cppli.hpp"
 #include "cppli/help.hpp"
 #include "cppli/option.hpp"
+#include "crypto/rsa.hpp"
 #include <cstdint>
 #define GLFW_INCLUDE_NONE
 #include "GLFW/glfw3.h"
@@ -160,6 +161,13 @@ auto parseCommandlineArgs(AppContext &ctx, int argc,
   style.FontScaleDpi = mainScale;
   ImGui_ImplGlfw_InitForOpenGL(ctx->window, /*install_callbacks=*/true);
   ImGui_ImplOpenGL3_Init(GLSL_VERSION);
+
+  if (auto keyRes = crypto::RsaKeyPair::generate()) {
+    ctx->rsaKey = std::move(*keyRes);
+  } else {
+    logzy::critical("Couldn't create RSA key pair: {}", keyRes.error());
+    return std::nullopt;
+  }
 
   return ctx;
 }

@@ -1,6 +1,7 @@
 
 #include "client/application.hpp"
 #include "crypto/crypto.hpp"
+#include "crypto/rsa.hpp"
 #include "imgui.h"
 #include "network/packet.hpp"
 #include "network/socket.hpp"
@@ -27,18 +28,30 @@ struct AppState {
 } // namespace
 
 auto main(int argc, char const *const *const argv) -> int {
-
   AppContext ctx;
 
   bool terminate = false;
 
   if (auto ctxOpt = initialize(argc, argv, terminate)) {
-    ctx = *ctxOpt;
+    ctx = std::move(*ctxOpt);
   } else {
     if (terminate) {
       return EXIT_SUCCESS;
     }
     return EXIT_FAILURE;
+  }
+
+  if (auto publicKey = ctx.rsaKey.publicKeyPem()) {
+    logzy::info("Public key PEM:\n{}", *publicKey);
+  } else {
+    logzy::warn("Couldnt generate PEM for public key. {}", publicKey.error());
+  }
+
+  if (auto privateKey = ctx.rsaKey.privateKeyPem()) {
+    logzy::info("Private key PEM:\n{}", *privateKey);
+  } else {
+    logzy::warn("Couldnt generate PEM for privateKey key. {}",
+                privateKey.error());
   }
 
   logzy::trace("Connecting to server: {}:{}", ctx.serverIp, ctx.serverPort);

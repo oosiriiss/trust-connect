@@ -51,10 +51,12 @@ add_library(
 
    src/crypto/crypto.hpp
    src/crypto/crypto.cpp
-   src/crypto/hash.hpp
-   src/crypto/hash.cpp
    src/crypto/openssl.hpp
    src/crypto/openssl.cpp
+   src/crypto/hash.hpp
+   src/crypto/hash.cpp
+   src/crypto/rsa.hpp
+   src/crypto/rsa.cpp
 )
 
 add_executable(

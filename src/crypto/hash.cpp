@@ -1,26 +1,11 @@
 #include "hash.hpp"
 #include "debug_utils.hpp"
 
+#include "openssl.hpp"
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
 
 namespace crypto {
-template <std::size_t Bytes>
-[[nodiscard]] static auto generateRandomBytes() noexcept
-    -> std::expected<static_string<Bytes>, std::string> {
-
-  std::expected<static_string<Bytes>, std::string> output{
-      static_string<Bytes>{}};
-
-  if (RAND_bytes(
-          reinterpret_cast<unsigned char *>(output->data.data()), // NOLINT
-          Bytes) == 0) {
-    return std::unexpected(std::string("RAND_bytes failed"));
-  }
-  return output;
-}
-
-template std::expected<Hash32, std::string> generateRandomBytes<32>();
 
 [[nodiscard]] auto sha256(std::string_view input) noexcept
     -> std::expected<Hash32, std::string> {
@@ -30,22 +15,26 @@ template std::expected<Hash32, std::string> generateRandomBytes<32>();
 
   EVP_MD_CTX *ctx = EVP_MD_CTX_new();
   if (ctx == nullptr) {
-    return std::unexpected(std::string("sha256 :: EVP_MD_CTX_new failed"));
+    return std::unexpected(std::format("sha256 :: EVP_MD_CTX_new failed: {}",
+                                       openssl::getError()));
   }
 
   if (EVP_DigestInit(ctx, EVP_sha256()) == 0) {
-    return std::unexpected(std::string("sha256 :: EVP_DigestInit failed"));
+    return std::unexpected(std::format("sha256 :: EVP_DigestInit failed: {}",
+                                       openssl::getError()));
   }
 
   if (EVP_DigestUpdate(ctx, input.data(), input.size()) == 0) {
-    return std::unexpected(std::string("sha256 :: EVP_DigetsUpdate failed"));
+    return std::unexpected(std::format("sha256 :: EVP_DigetsUpdate failed: {}",
+                                       openssl::getError()));
   }
 
   if (EVP_DigestFinal(
           ctx,
           reinterpret_cast<unsigned char *>(output->data.data()), // NOLINT
           &length) == 0) {
-    return std::unexpected(std::string("sha256 :: EVP_DigestFinal failed"));
+    return std::unexpected(std::format("sha256 :: EVP_DigestFinal failed: {}",
+                                       openssl::getError()));
   }
 
   EVP_MD_CTX_free(ctx);

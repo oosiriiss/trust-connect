@@ -2,6 +2,7 @@
 
 #include "GLFW/glfw3.h"
 #include "constants.hpp"
+#include "crypto/rsa.hpp"
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -12,6 +13,8 @@ struct AppContext {
   std::string ttpIp{network::DEFAULT_TTP_IP};
   std::uint16_t serverPort{network::DEFAULT_SERVER_PORT};
   std::uint16_t ttpPort{network::DEFAULT_TTP_PORT};
+
+  crypto::RsaKeyPair rsaKey{};
 };
 
 [[nodiscard]] auto initialize(int argc, char const *const *argv,
