@@ -1,5 +1,6 @@
 
 #include "client/application.hpp"
+#include "common.hpp"
 #include "crypto/crypto.hpp"
 #include "crypto/rsa.hpp"
 #include "imgui.h"
@@ -17,6 +18,7 @@ namespace {
 enum class AppStage {
   GeneratingID,
   Registering,
+  Registered,
 
 };
 
@@ -54,22 +56,18 @@ auto main(int argc, char const *const *const argv) -> int {
                 privateKey.error());
   }
 
-  logzy::trace("Connecting to server: {}:{}", ctx.serverIp, ctx.serverPort);
-  network::TcpSocket clientSocket;
-  if (auto socketExp =
-          network::TcpSocket::connect(ctx.serverIp, ctx.serverPort)) {
+  network::TcpSocket serverSocket;
+  if (!connectTo(serverSocket, ctx.serverIp, ctx.serverPort, "Server")) {
+    return EXIT_FAILURE;
+  }
 
-    clientSocket = std::move(*socketExp);
-
-  } else {
-    logzy::critical("Couldn't create client socket. Reason: {}",
-                    socketExp.error());
+  network::TcpSocket ttpSocket;
+  if (!connectTo(ttpSocket, ctx.ttpIp, ctx.ttpPort, "Trusted third party")) {
     return EXIT_FAILURE;
   }
 
   AppState state{};
   while (glfwWindowShouldClose(ctx.window) == 0) {
-
     if (!beginFrame(ctx)) {
       continue;
     }
@@ -95,46 +93,57 @@ auto main(int argc, char const *const *const argv) -> int {
       case AppStage::Registering: {
         std::string userIdString = crypto::hashToHex(state.id);
         ImGui::Text("User ID: %s", userIdString.c_str());
-      } break;
-      }
-
-      if (!state.errorMessage.empty()) {
-        ImGui::Text("Error: %s", state.errorMessage.c_str());
-      }
-
-      if (ImGui::Button("Send data")) {
-        nlohmann::json payload;
-        payload["value"] = "Hello";
-        if (auto err = clientSocket.send(
-                network::Packet{.type = network::PacketType::RegisterRequest,
-                                .payload = std::move(payload)})) {
-          logzy::error("Couldn't send data: {}", *err);
-        }
-      }
-
-      if (ImGui::Button("Receive data")) {
-        if (auto received = clientSocket.receive()) {
-          logzy::info("Received: {}", *received);
-
-          switch (received->type) {
-          case network::PacketType::RegisterResponse:
-            break;
-          case network::PacketType::CloseConnection:
-            logzy::info("Client disconnected");
-            glfwSetWindowShouldClose(ctx.window, 1);
-            break;
-          default:
-            logzy::error("Invalid packet received: {}", received->type);
-            break;
+        if (ImGui::Button("Send ID")) {
+          if (!registerWithTtp(ttpSocket, state.id)) {
+            logzy::error("Registering with TTP failed");
           }
 
-        } else {
-          logzy::error("Couldn't receive message from server: {}",
-                       received.error());
+          state.stage = AppStage::Registered;
         }
+      } break;
+
+      case AppStage::Registered: {
+
+        logzy::info("Received from ttp: {}", *ttpSocket.receive());
+
+        if (!state.errorMessage.empty()) {
+          ImGui::Text("Error: %s", state.errorMessage.c_str());
+        }
+
+        if (ImGui::Button("Send data")) {
+          nlohmann::json payload;
+          payload["value"] = "Hello";
+          if (auto err = serverSocket.send(
+                  network::Packet{.type = network::PacketType::RegisterRequest,
+                                  .payload = std::move(payload)})) {
+            logzy::error("Couldn't send data: {}", *err);
+          }
+        }
+
+        if (ImGui::Button("Receive data")) {
+          if (auto received = serverSocket.receive()) {
+            logzy::info("Received: {}", *received);
+
+            switch (received->type) {
+            case network::PacketType::RegisterResponse:
+              break;
+            case network::PacketType::CloseConnection:
+              logzy::info("Client disconnected");
+              glfwSetWindowShouldClose(ctx.window, 1);
+              break;
+            default:
+              logzy::error("Invalid packet received: {}", received->type);
+              break;
+            }
+
+          } else {
+            logzy::error("Couldn't receive message from server: {}",
+                         received.error());
+          }
+        }
+      } break;
       }
     }
-
     endFrame(ctx);
   }
 

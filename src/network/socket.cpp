@@ -19,7 +19,7 @@ static void closeSocket(int &fd) {
   }
 
   if (shutdown(fd, SHUT_RDWR) != 0) {
-    logzy::warn("Closing scocket {} failed", fd);
+    logzy::warn("Closing socket {} failed", fd);
   }
   fd = INVALID_SOCKET;
 }
@@ -42,7 +42,6 @@ auto TcpSocket::connect(const std::string &host, std::uint16_t port) noexcept
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_port = htons(port);
-
   inet_pton(addr.sin_family, host.c_str(), &addr.sin_addr);
 
   std::expected<TcpSocket, std::string> socket{TcpSocket{}};

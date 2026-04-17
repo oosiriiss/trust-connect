@@ -1,3 +1,4 @@
+#include "common.hpp"
 #include "constants.hpp"
 #include "cppli/cppli.hpp"
 #include "crypto/crypto.hpp"
@@ -93,32 +94,33 @@ auto parseCommandlineArgs(AppContext &ctx, int argc,
 
 auto main(int argc, const char *const *const argv) -> int {
 
-  std::uint16_t port = network::DEFAULT_SERVER_PORT;
   AppContext ctx{};
 
-  if (parseCommandlineArgs(port, argc, argv)) {
   if (parseCommandlineArgs(ctx, argc, argv)) {
     return EXIT_SUCCESS;
   }
 
-  crypto::Hash32 id{};
-
   logzy::info("Generating server id");
   if (auto idExp = crypto::generateRandomId("Server")) {
-    id = *idExp;
     ctx.id = *idExp;
   } else {
     logzy::critical("Couldn't generate ID for client. Reason: {}",
                     idExp.error());
     return EXIT_FAILURE;
   }
-  logzy::info("ID generated: {}", crypto::hashToHex(id));
   logzy::info("ID generated: {}", crypto::hashToHex(ctx.id));
 
-  logzy::info("Binding to port {}", port);
+  network::TcpSocket ttpSocket;
+  if (!connectTo(ttpSocket, ctx.ttpIp, ctx.ttpPort, "Trusted third party")) {
+    return EXIT_FAILURE;
+  }
+
+  if (!registerWithTtp(ttpSocket, ctx.id)) {
+    return EXIT_FAILURE;
+  }
+
   logzy::info("Binding to port {}", ctx.bindPort);
   network::TcpServer server;
-  if (auto err = server.listen(port)) {
   if (auto err = server.listen(ctx.bindPort)) {
     logzy::critical("Server listen failed. Reason: {}", *err);
     return EXIT_FAILURE;

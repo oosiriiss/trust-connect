@@ -1,12 +1,13 @@
 #include "constants.hpp"
 #include "cppli/cppli.hpp"
 #include "logzy/logzy.hpp"
+#include "network/socket.hpp"
 #include <print>
 
 namespace {
 
 enum class OptionKey {
-  Port,
+  BindPort,
   Help,
 };
 
@@ -14,7 +15,7 @@ auto getOptions() {
   cppli::OptionContainer<OptionKey> options;
 
   options.addOption(
-      OptionKey::Port,
+      OptionKey::BindPort,
       cppli::Option{.firstName = "-p",
                     .secondName = "--port",
                     .description =
@@ -47,7 +48,7 @@ auto parseCommandlineArgs(std::uint16_t &ctx, int argc,
     return true;
   }
 
-  if (auto port = result.options.find(OptionKey::Port);
+  if (auto port = result.options.find(OptionKey::BindPort);
       port != result.options.end()) {
     ctx = std::stoi(std::string(port->second.value.value()));
   }
@@ -55,17 +56,84 @@ auto parseCommandlineArgs(std::uint16_t &ctx, int argc,
   return false;
 }
 
+auto receiveClient(network::TcpSocket &client, std::string_view clientName)
+    -> bool {
+
+  logzy::trace("Waiting for client {} to send data", clientName);
+
+  if (auto received = client.receive()) {
+    logzy::info("Received: {}", *received);
+
+    if (received->type == network::PacketType::CloseConnection) {
+      return false;
+    }
+
+    nlohmann::json payload;
+    payload["value_response"] = received->payload["id"];
+    auto packet = network::Packet{.type = network::PacketType::RegisterResponse,
+                                  .payload = std::move(payload)};
+
+    logzy::trace("Sending echo message to: {}", clientName);
+    // Echo
+    if (auto err = client.send(packet)) {
+      logzy::error("Couldn't send send echo messge to client. {}", *err);
+      return false;
+    }
+    logzy::trace("Sent");
+
+  } else {
+    logzy::error("Couldn't receive message from client {}: {}", clientName,
+                 received.error());
+    return false;
+  }
+
+  return true;
+}
+
 } // namespace
 
 auto main(int argc, const char *const *const argv) -> int {
 
-  std::uint16_t port = network::DEFAULT_SERVER_PORT;
+  std::uint16_t bindPort = network::DEFAULT_TTP_PORT;
 
-  if (parseCommandlineArgs(port, argc, argv)) {
+  if (parseCommandlineArgs(bindPort, argc, argv)) {
     return EXIT_SUCCESS;
   }
 
-  logzy::info("Listening on port: {}", port);
+  network::TcpServer server;
+  if (auto err = server.listen(bindPort)) {
+    logzy::critical("TTP Server listen failed. Reason: {}", *err);
+    return EXIT_FAILURE;
+  }
+
+  logzy::info("Waiting for first client to connect");
+  network::TcpSocket client1;
+  network::TcpSocket client2;
+
+  if (auto connectedClient = server.accept()) {
+    logzy::info("First client connected");
+    client1 = std::move(*connectedClient);
+  } else {
+    logzy::error("First Client connection failed: {}", connectedClient.error());
+  }
+
+  if (auto connectedClient = server.accept()) {
+    logzy::info("Second client connected");
+    client2 = std::move(*connectedClient);
+  } else {
+    logzy::error("Second Client connection failed: {}",
+                 connectedClient.error());
+  }
+  logzy::info("Clients connected");
+
+  while (true) {
+    if (!receiveClient(client1, "Client 1")) {
+      break;
+    }
+    if (!receiveClient(client2, "Client 2")) {
+      break;
+    }
+  }
 
   return 0;
 }

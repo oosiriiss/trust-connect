@@ -46,6 +46,7 @@ add_library(
 
    src/network/socket.hpp
    src/network/socket.cpp
+
    src/network/packet.hpp
    src/network/packet.cpp
 
@@ -57,6 +58,9 @@ add_library(
    src/crypto/hash.cpp
    src/crypto/rsa.hpp
    src/crypto/rsa.cpp
+
+   src/common.hpp
+   src/common.cpp
 )
 
 add_executable(
@@ -94,8 +98,8 @@ message(STATUS "OpenSSL include dir: ${OPENSSL_INCLUDE_DIR}")
 message(STATUS "OpenSSL libs: ${OPENSSL_LIBRARIES}")
 
 target_link_libraries(shared-lib PUBLIC OpenSSL::SSL OpenSSL::Crypto logzy::logzy cppli::cppli nlohmann_json::nlohmann_json)
-target_link_libraries(ttp-app PRIVATE shared-lib)
-target_link_libraries(server-app PRIVATE shared-lib)
+target_link_libraries(ttp-app PRIVATE shared-lib )
+target_link_libraries(server-app PRIVATE shared-lib )
 
 
 
