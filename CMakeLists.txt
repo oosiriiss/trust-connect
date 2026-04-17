@@ -58,6 +58,8 @@ add_library(
    src/crypto/hash.cpp
    src/crypto/rsa.hpp
    src/crypto/rsa.cpp
+   src/crypto/base64.hpp
+   src/crypto/base64.cpp
 
    src/common.hpp
    src/common.cpp
