@@ -3,6 +3,7 @@
 #include "cppli/cppli.hpp"
 #include "crypto/crypto.hpp"
 #include "crypto/hash.hpp"
+#include "crypto/rsa.hpp"
 #include "logzy/logzy.hpp"
 #include "network/packet.hpp"
 #include "network/socket.hpp"
@@ -115,7 +116,27 @@ auto main(int argc, const char *const *const argv) -> int {
     return EXIT_FAILURE;
   }
 
-  if (!registerWithTtp(ttpSocket, ctx.id)) {
+  crypto::RsaKeyPair serverKey;
+  if (auto keyResult = crypto::RsaKeyPair::generate()) {
+    serverKey = std::move(*keyResult);
+  } else {
+    logzy::critical("Couldn't generate servers RSA key pair");
+    return EXIT_FAILURE;
+  }
+
+  std::string publicKeyPem;
+  if (auto pemResult = serverKey.publicKeyPem()) {
+    publicKeyPem = std::move(*pemResult);
+  } else {
+    logzy::critical("Couldn't generate servers RSA public PEM");
+    return EXIT_FAILURE;
+  }
+
+  crypto::RsaKeyPair ttpPublicKey;
+
+  if (auto ttpKeyResult = registerWithTtp(ttpSocket, ctx.id, publicKeyPem)) {
+    ttpPublicKey = std::move(*ttpKeyResult);
+  } else {
     return EXIT_FAILURE;
   }
 

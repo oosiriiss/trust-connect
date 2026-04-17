@@ -1,6 +1,7 @@
 #pragma once
 
 #include "crypto/hash.hpp"
+#include "crypto/rsa.hpp"
 #include "network/socket.hpp"
 #include <string>
 
@@ -9,4 +10,6 @@
                              std::string_view targetName) -> bool;
 
 [[nodiscard]] auto registerWithTtp(network::TcpSocket &socket,
-                                   const crypto::Hash32 &id) -> bool;
+                                   const crypto::Hash32 &id,
+                                   const std::string &publicKeyPem)
+    -> std::optional<crypto::RsaKeyPair>;

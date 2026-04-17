@@ -1,5 +1,4 @@
 #pragma once
-#include "logzy/logzy.hpp"
 #include <cstdint>
 #include <expected>
 #include <format>
@@ -8,6 +7,8 @@
 namespace network {
 
 enum class PacketType : std::int8_t {
+  TradePublicKeysWithTtpRequest,
+  TradePublicKeysWithTtpResponse,
   RegisterRequest,
   RegisterResponse,
   CloseConnection,
@@ -36,8 +37,12 @@ template <> struct std::formatter<network::PacketType> {
   static auto format(const network::PacketType t, std::format_context &ctx) {
     using Type = network::PacketType;
     static std::unordered_map<Type, const char *> mappings{
+        {Type::TradePublicKeysWithTtpRequest, "TradePublicKeysWithTtpRequest"},
+        {Type::TradePublicKeysWithTtpResponse,
+         "TradePublicKeysWithTtpResponse"},
         {Type::RegisterRequest, "RegisterRequest"},
         {Type::RegisterResponse, "RegisterResponse"},
+        {Type::CloseConnection, "CloseConnection"},
         {Type::__SizeGuard, "__SizeGuard"},
     };
 

@@ -66,6 +66,8 @@ auto main(int argc, char const *const *const argv) -> int {
     return EXIT_FAILURE;
   }
 
+  crypto::RsaKeyPair ttpPublicKey;
+
   AppState state{};
   while (glfwWindowShouldClose(ctx.window) == 0) {
     if (!beginFrame(ctx)) {
@@ -91,20 +93,34 @@ auto main(int argc, char const *const *const argv) -> int {
       } break;
 
       case AppStage::Registering: {
-        std::string userIdString = crypto::hashToHex(state.id);
-        ImGui::Text("User ID: %s", userIdString.c_str());
-        if (ImGui::Button("Send ID")) {
-          if (!registerWithTtp(ttpSocket, state.id)) {
-            logzy::error("Registering with TTP failed");
-          }
+        ImGui::Text("User ID: %s", crypto::hashToHex(state.id).c_str());
 
-          state.stage = AppStage::Registered;
+        if (!ImGui::Button("Register with TTP")) {
+          break;
         }
+        logzy::trace("Beggining registering with TTP");
+
+        std::string publicKeyPem;
+        logzy::trace("Generating public key PEM to send to TTP");
+
+        if (auto keyPemResult = ctx.rsaKey.publicKeyPem()) {
+          publicKeyPem = std::move(*keyPemResult);
+        } else {
+          logzy::error("couldn't generate public key PEM from key");
+          break;
+        }
+
+        if (auto keyOpt = registerWithTtp(ttpSocket, state.id, publicKeyPem)) {
+          ttpPublicKey = std::move(*keyOpt);
+        } else {
+          break;
+        }
+        logzy::info("Successfully registerd with TTP");
+        state.stage = AppStage::Registered;
+
       } break;
 
       case AppStage::Registered: {
-
-        logzy::info("Received from ttp: {}", *ttpSocket.receive());
 
         if (!state.errorMessage.empty()) {
           ImGui::Text("Error: %s", state.errorMessage.c_str());
