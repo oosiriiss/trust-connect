@@ -14,6 +14,8 @@ enum class PacketType : std::int8_t {
   ServiceRequest,
   ServerAuthRequest,
   ServerAuthOk,
+  UserAuthDataSubmit,
+  UserAuthOk,
   UserAuthRedirect,
   CloseConnection,
   __SizeGuard, // NOLINT
@@ -42,21 +44,22 @@ template <> struct std::formatter<network::PacketType> {
     using Type = network::PacketType;
     static std::unordered_map<Type, const char *> mappings{
 
-        {Type::TradePublicKeysWithTtpRequest,
-         "Type::TradePublicKeysWithTtpRequest"},
+        {Type::TradePublicKeysWithTtpRequest, "TradePublicKeysWithTtpRequest"},
         {Type::TradePublicKeysWithTtpResponse,
-         "Type::TradePublicKeysWithTtpResponse"},
-        {Type::RegisterRequest, "Type::RegisterRequest"},
-        {Type::RegisterResponse, "Type::RegisterResponse"},
-        {Type::ServiceRequest, "Type::ServiceRequest"},
-        {Type::ServerAuthRequest, "Type::ServerAuthRequest"},
-        {Type::ServerAuthOk, "Type::ServerAuthOk"},
-        {Type::UserAuthRedirect, "Type::UserAuthRedirect"},
-        {Type::CloseConnection, "Type::CloseConnection"},
-        {Type::__SizeGuard, "Type::__SizeGuard"},
+         "TradePublicKeysWithTtpResponse"},
+        {Type::RegisterRequest, "RegisterRequest"},
+        {Type::RegisterResponse, "RegisterResponse"},
+        {Type::ServiceRequest, "ServiceRequest"},
+        {Type::ServerAuthRequest, "ServerAuthRequest"},
+        {Type::ServerAuthOk, "ServerAuthOk"},
+        {Type::UserAuthDataSubmit, "UserAuthDataSubmit"},
+        {Type::UserAuthOk, "UserAuthOk"},
+        {Type::UserAuthRedirect, "UserAuthRedirect"},
+        {Type::CloseConnection, "CloseConnection"},
+        {Type::__SizeGuard, "__SizeGuard"},
     };
 
-    return std::format_to(ctx.out(), "{}", mappings[t]);
+    return std::format_to(ctx.out(), "{}", mappings.at(t));
   }
 };
 

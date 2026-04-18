@@ -1,6 +1,7 @@
 #include "common.hpp"
 #include "constants.hpp"
 #include "cppli/cppli.hpp"
+#include "crypto/aes.hpp"
 #include "crypto/base64.hpp"
 #include "crypto/crypto.hpp"
 #include "crypto/hash.hpp"
@@ -96,6 +97,7 @@ void estabilishConnection(network::TcpSocket &clientSocket,
                           network::TcpSocket &ttpSocket,
                           const nlohmann::json &requestPayload,
                           const crypto::Hash32 &serverID,
+                          const crypto::RsaKeyPair &serverKey,
                           const crypto::RsaKeyPair &ttpKey) {
   // Service request sent
 
@@ -156,12 +158,62 @@ void estabilishConnection(network::TcpSocket &clientSocket,
                  ttpVerificationResult.error());
   }
 
-  // WATITIGN for User auth ok from ttp
-  // WATITIGN for User auth ok from ttp
-  // WATITIGN for User auth ok from ttp
-  // WATITIGN for User auth ok from ttp
-  // WATITIGN for User auth ok from ttp
-  // WATITIGN for User auth ok from ttp
+  logzy::trace("Waiting for client's auth");
+  if (auto clientAuthResult = ttpSocket.receive()) {
+    if (clientAuthResult->type != network::PacketType::UserAuthOk) {
+      logzy::error("Authenticating user failed. Received wrong packet with "
+                   "type {}. Expected UserAuthOk",
+                   clientAuthResult->type);
+      return;
+    }
+
+    const auto serverSessionKey = clientAuthResult->payload.value(
+        "server_session_key", std::string_view{""});
+    const auto clientSessionKey = clientAuthResult->payload.value(
+        "client_session_key", std::string_view{""});
+
+    if (serverSessionKey.empty() || clientSessionKey.empty()) {
+      logzy::error("USerAuthOk packet sohould have server_session_key and "
+                   "client_session_key json fields.");
+      return;
+    }
+
+    if (auto err = clientSocket.send(*clientAuthResult)) {
+      logzy::error("Couldn't forward clientAuthResult packet to the client. {}",
+                   *err);
+    }
+
+    // TODO :: Store them somewhere
+    crypto::Aes256 sessionKey{};
+
+    if (auto keyString =
+            crypto::decodeAndDecrypt(serverSessionKey, serverKey)) {
+
+      if (auto aes = crypto::Aes256::fromKey(*keyString)) {
+        sessionKey = std::move(*aes);
+      } else {
+        logzy::error("Couldnt create AES 256 GCM form key '{}'. {}", *keyString,
+                     aes.error());
+        return;
+      }
+    } else {
+      logzy::error("Couldn't decode and decrypt aes key. {}",
+                   keyString.error());
+      return;
+    }
+
+    logzy::info("Session key: {}", sessionKey.getRawKey());
+
+    logzy::info("Auth success. Received session data.");
+
+    logzy::info("Encrypted 'test' = '{}'", *sessionKey.encrypt("test"));
+
+    // SESSION KEY lalalallal blablablabla
+
+  } else {
+    logzy::error("Couldn't receive TTP's user verification packet. {}",
+                 clientAuthResult.error());
+  }
 }
 
 } // namespace
@@ -241,7 +293,7 @@ auto main(int argc, const char *const *const argv) -> int {
 
       if (received->type == network::PacketType::ServiceRequest) {
         estabilishConnection(*clientSocket, ttpSocket, received->payload,
-                             ctx.id, ttpPublicKey);
+                             ctx.id, serverKey, ttpPublicKey);
       }
 
     } else {

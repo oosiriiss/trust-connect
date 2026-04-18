@@ -1,6 +1,7 @@
 
 #include "client/application.hpp"
 #include "common.hpp"
+#include "crypto/aes.hpp"
 #include "crypto/base64.hpp"
 #include "crypto/crypto.hpp"
 #include "crypto/hash.hpp"
@@ -11,6 +12,7 @@
 #include "ui/window.hpp"
 #include <GLFW/glfw3.h>
 #include <cstdlib>
+#include <logzy/formatters.hpp>
 #include <logzy/logzy.hpp>
 
 #include <cppli/cppli.hpp>
@@ -33,6 +35,7 @@ struct AppState {
 
 void estabilishSession(network::TcpSocket &serverSocket,
                        network::TcpSocket &ttpSocket,
+                       const crypto::RsaKeyPair &clientKey,
                        const crypto::RsaKeyPair &ttpPublicKey,
                        const crypto::Hash32 &id) {
 
@@ -116,6 +119,76 @@ void estabilishSession(network::TcpSocket &serverSocket,
   } else {
     logzy::error("Receving failed. {}", packet.error());
     return;
+  }
+
+  logzy::trace("Sending user auth data to TTP");
+
+  if (auto err = ttpSocket.send(
+          network::Packet{.type = network::PacketType::UserAuthDataSubmit,
+                          .payload = {
+                              {"id", userId},
+
+                          }})) {
+    logzy::error("Couldn't send user auth data to TTP. {}", *err);
+    return;
+  }
+
+  // Server should notify the client that its ok and pass the sssion key
+
+  if (auto authResult = serverSocket.receive()) {
+    if (authResult->type != network::PacketType::UserAuthOk) {
+      logzy::error("User auth failed. expected UserAuthOk packet but got {}",
+                   authResult->type);
+      return;
+    }
+
+    const auto clientSessionKey =
+        authResult->payload.value("client_session_key", std::string_view{""});
+
+    if (clientSessionKey.empty()) {
+      logzy::error(
+          "Server didn't send AES 256 GCM session key with UserAuthOk packet.");
+      return;
+    }
+
+    crypto::Aes256 sessionKey{};
+
+    if (auto keyString =
+            crypto::decodeAndDecrypt(clientSessionKey, clientKey)) {
+
+      if (auto aes = crypto::Aes256::fromKey(*keyString)) {
+        sessionKey = std::move(*aes);
+      } else {
+        logzy::error("Couldnt create AES 256 GCM form key '{}'. {}", *keyString,
+                     aes.error());
+        return;
+      }
+    } else {
+      logzy::error("Couldn't decode and decrypt aes key. {}",
+                   keyString.error());
+      return;
+    }
+    logzy::info("Session key: {}", sessionKey.getRawKey());
+
+    std::string_view plaintext = "test";
+
+    if (auto encrypted = sessionKey.encrypt(plaintext)) {
+
+      if (auto decrypted = sessionKey.decrypt(*encrypted)) {
+
+        logzy::info("Encrypted and decrypted '{}' = '{}'", plaintext,
+                    *decrypted);
+
+      } else {
+        logzy::error("Decryption error: {}", decrypted.error());
+      }
+
+    } else {
+      logzy::error("Encryption error: {}", encrypted.error());
+    }
+
+  } else {
+    logzy::error("Receiving from clietn failed. {}", authResult.error());
   }
 }
 
@@ -215,7 +288,8 @@ auto main(int argc, char const *const *const argv) -> int {
       case AppStage::Registered: {
 
         if (ImGui::Button("Request service")) {
-          estabilishSession(serverSocket, ttpSocket, ttpPublicKey, state.id);
+          estabilishSession(serverSocket, ttpSocket, ctx.rsaKey, ttpPublicKey,
+                            state.id);
         }
 
       } break;

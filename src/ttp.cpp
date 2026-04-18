@@ -1,14 +1,19 @@
 #include "constants.hpp"
 #include "cppli/cppli.hpp"
 #include "cppli/vendor/debug_utils.hpp"
+#include "crypto/aes.hpp"
 #include "crypto/base64.hpp"
 #include "crypto/crypto.hpp"
+#include "crypto/openssl.hpp"
 #include "crypto/rsa.hpp"
 #include "logzy/logzy.hpp"
 #include "network/packet.hpp"
 #include "network/socket.hpp"
 #include <chrono>
+#include <expected>
+#include <memory>
 #include <print>
+#include <random>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -41,6 +46,10 @@ struct StringCompare {
 struct TtpState {
   std::unordered_map<std::string, crypto::RsaKeyPair, StringHash, StringCompare>
       clientsPublicKeys;
+  std::unordered_map<std::string, std::weak_ptr<network::TcpSocket>>
+      pendingAuthentications;
+  std::unordered_map<std::string, std::weak_ptr<network::TcpSocket>>
+      connectedClients;
 };
 
 auto getOptions() {
@@ -88,7 +97,8 @@ auto parseCommandlineArgs(std::uint16_t &ctx, int argc,
   return false;
 }
 
-auto handleTradePublicKeys(TtpState &state, network::TcpSocket &client,
+auto handleTradePublicKeys(TtpState &state,
+                           std::shared_ptr<network::TcpSocket> &client,
                            std::string_view clientName,
                            const crypto::RsaKeyPair &ttpKey,
                            const nlohmann::json &payload) -> bool {
@@ -134,7 +144,7 @@ auto handleTradePublicKeys(TtpState &state, network::TcpSocket &client,
   logzy::trace("Sending TTP's public key PEM to the {}.PEM:\n{}", clientName,
                ttpPublicKeyPem);
 
-  if (auto err = client.send(network::Packet{
+  if (auto err = client->send(network::Packet{
           .type = network::PacketType::TradePublicKeysWithTtpResponse,
           .payload = {
               {"public_key_pem", std::move(ttpPublicKeyPem)},
@@ -147,7 +157,8 @@ auto handleTradePublicKeys(TtpState &state, network::TcpSocket &client,
   return true;
 }
 
-auto handleRegister(TtpState &state, network::TcpSocket &client,
+auto handleRegister(TtpState &state,
+                    std::shared_ptr<network::TcpSocket> &client,
                     std::string_view clientName,
                     const crypto::RsaKeyPair &ttpKey,
                     const nlohmann::json &payload) -> bool {
@@ -179,6 +190,12 @@ auto handleRegister(TtpState &state, network::TcpSocket &client,
     return false;
   }
 
+  logzy::trace("Saving client socket to map");
+  {
+    std::lock_guard lock{clientRegistryMutex};
+    state.connectedClients.insert({id, std::weak_ptr{client}});
+  }
+
   logzy::debug("Replacing internal key clientName for it's id");
 
   {
@@ -207,11 +224,10 @@ auto handleRegister(TtpState &state, network::TcpSocket &client,
   return true;
 }
 
-auto handleServerAuthRequest(const TtpState &state,
-                             const network::TcpSocket &client,
-                             const network::Packet &packet,
-                             std::string_view clientName,
-                             const crypto::RsaKeyPair &ttpKey) -> bool {
+auto handleServerAuthRequest(
+    TtpState &state, const std::shared_ptr<network::TcpSocket> &serverSocket,
+    const network::Packet &packet, std::string_view clientName,
+    const crypto::RsaKeyPair &ttpKey) -> bool {
   logzy::trace("{} Authenticating server", clientName);
 
   // TODO :: client validation will happen later maybe validating the client
@@ -277,7 +293,7 @@ auto handleServerAuthRequest(const TtpState &state,
     return false;
   }
 
-  if (auto err = client.send(network::Packet{
+  if (auto err = serverSocket->send(network::Packet{
           .type = network::PacketType::ServerAuthOk,
           .payload = {{"message", std::move(message)},
                       {"signature", std::move(messageSignature)}}})) {
@@ -285,13 +301,199 @@ auto handleServerAuthRequest(const TtpState &state,
     return false;
   }
 
+  auto iter = state.connectedClients.find(userId);
+  if (iter == state.connectedClients.end()) {
+    logzy::error("User not connected");
+    return false;
+  }
+
+  if (auto clientSocket = iter->second.lock()) {
+    if (auto err = clientSocket->send(network::Packet{
+            .type = network::PacketType::UserAuthRedirect, .payload = {}})) {
+      logzy::error("Couldn't send to client. {}", *err);
+    }
+
+  } else {
+    logzy::error("Client with id {} disconnected", userId);
+    return false;
+  }
+
   logzy::trace("{} Server authenticated", clientName);
+  logzy::trace("Server is waiting for client's authentication");
+
+  if (state.pendingAuthentications.contains(userId)) {
+    logzy::error("There is already a server waiting for id {}", userId);
+    return false;
+  }
+
+  {
+    std::lock_guard lock{clientRegistryMutex};
+    logzy::trace("Inserted waiting for user {}", userId);
+    state.pendingAuthentications.insert({userId, std::weak_ptr{serverSocket}});
+  }
+
+  return true;
+}
+
+auto encryptClientSessionKey(const TtpState &state, std::string_view clientId,
+                             std::string_view sessionKey)
+    -> std::expected<std::string, std::string> {
+
+  const crypto::RsaKeyPair *clientPublicKey{nullptr};
+  {
+    auto iter = state.clientsPublicKeys.find(clientId);
+    if (iter == state.clientsPublicKeys.end()) {
+      return std::unexpected(
+          std::format("Couldn't find user's id='{}' session key", clientId));
+    }
+    clientPublicKey = &iter->second;
+  }
+
+  std::expected<std::string, std::string> encryptedClientKey{std::string{}};
+  if (auto encKey = clientPublicKey->encryptPublic(sessionKey)) {
+    *encryptedClientKey = std::move(*encKey);
+  } else {
+    return encKey;
+  }
+
+  if (auto based = crypto::base64Encode(*encryptedClientKey)) {
+    *encryptedClientKey = std::move(*based);
+  } else {
+    return based;
+  }
+
+  return encryptedClientKey;
+}
+
+auto findServerId(const TtpState &state, std::string_view clientId)
+    -> std::expected<std::string_view, std::string> {
+
+  std::lock_guard lock{clientRegistryMutex};
+
+  const network::TcpSocket *serverSocket{nullptr};
+
+  // Finding socket that waits for curerent user to authenticate
+  for (const auto &[userId, sock] : state.pendingAuthentications) {
+    if (userId == clientId) {
+      if (auto sockPtr = sock.lock()) {
+        serverSocket = sockPtr.get();
+      }
+    }
+  }
+
+  if (serverSocket == nullptr) {
+    return std::unexpected("No server is waiting for client with id {} and "
+                           "findServerId cannot finish properly.");
+  }
+
+  for (const auto &[id, sock] : state.connectedClients) {
+    if (auto sockPtr = sock.lock()) {
+      if (serverSocket == sockPtr.get()) {
+        return id;
+      }
+    }
+  }
+
+  return std::unexpected("Couldn't find server in connected Clients. Maybe "
+                         "the server disconnected");
+}
+
+auto handleUserAuthDataSubmit(const TtpState &state,
+                              const std::shared_ptr<network::TcpSocket> &client,
+                              const network::Packet &packet,
+                              std::string_view clientName,
+                              const crypto::RsaKeyPair &ttpKey) -> bool {
+
+  std::string id = packet.payload.value("id", "");
+  if (id.empty()) {
+    logzy::error("User {} didn't send id key", clientName);
+    return false;
+  }
+
+  if (auto idResult = crypto::decodeAndDecrypt(id, ttpKey)) {
+    id = std::move(*idResult);
+  } else {
+    logzy::error("Couldn't decrypt user's {} id {}. {}", clientName, id,
+                 idResult.error());
+    return false;
+  }
+
+  if (!state.clientsPublicKeys.contains(id)) {
+    logzy::error("User with id: {} is not registered to the TTP", id);
+    return false;
+  }
+
+  auto waitingServer = state.pendingAuthentications.find(id);
+  if (waitingServer == state.pendingAuthentications.end()) {
+    logzy::error("No server is waiting for user with id {} authentication", id);
+    return false;
+  }
+
+  std::string sessionKey;
+  sessionKey.reserve(32);
+
+  if (auto bytes = crypto::openssl::generateRandomBytes<32>()) {
+    sessionKey.append(std::string_view{bytes->data.begin(), bytes->size()});
+  } else {
+    logzy::error("Couldn't generate session key. {}", bytes.error());
+  }
+
+  logzy::trace("Session key. {}", sessionKey);
+
+  std::string_view serverId;
+
+  if (auto serverIdResult = findServerId(state, id)) {
+    serverId = *serverIdResult;
+  }
+
+  logzy::trace("Server id: {}", serverId);
+
+  std::string encryptedServerSessionKey;
+  std::string encryptedClientSessionKey;
+
+  if (auto encSessKey = encryptClientSessionKey(state, id, sessionKey)) {
+    encryptedClientSessionKey = std::move(*encSessKey);
+  } else {
+    logzy::error("Couldn't encrypt clients's session key. {}",
+                 encSessKey.error());
+    return false;
+  }
+
+  if (auto encSessKey = encryptClientSessionKey(state, serverId, sessionKey)) {
+    encryptedServerSessionKey = std::move(*encSessKey);
+  } else {
+    logzy::error("Couldn't encrypt server's session key. {}",
+                 encSessKey.error());
+    return false;
+  }
+
+  // Server should notify the client about success and pass the session key
+  if (auto server = waitingServer->second.lock()) {
+    if (auto err = server->send(network::Packet{
+            .type = network::PacketType::UserAuthOk,
+            .payload = {
+                {"server_session_key", std::move(encryptedServerSessionKey)},
+                {"client_session_key", std::move(encryptedClientSessionKey)},
+            }})) {
+      logzy::error("Couldn't notify the server that user has "
+                   "authenticated with TTP. {}",
+                   *err);
+      return false;
+    }
+
+  } else {
+    logzy::error(
+        "Server that was waiting for authentication closed connection.");
+    return false;
+  }
+
   return true;
 }
 
 auto handlePacket(TtpState &state, network::Packet packet,
-                  network::TcpSocket &client, std::string_view clientName,
-                  const crypto::RsaKeyPair &ttpKey) -> bool {
+                  std::shared_ptr<network::TcpSocket> &client,
+                  std::string_view clientName, const crypto::RsaKeyPair &ttpKey)
+    -> bool {
 
   switch (packet.type) {
   case network::PacketType::TradePublicKeysWithTtpRequest:
@@ -303,6 +505,10 @@ auto handlePacket(TtpState &state, network::Packet packet,
     return handleServerAuthRequest(state, client, packet, clientName, ttpKey);
   case network::PacketType::CloseConnection:
     return false;
+  case network::PacketType::UserAuthDataSubmit:
+    return handleUserAuthDataSubmit(state, client, packet, clientName, ttpKey);
+  case network::PacketType::UserAuthOk:
+    [[fallthrough]];
   case network::PacketType::UserAuthRedirect:
     [[fallthrough]];
   case network::PacketType::ServiceRequest:
@@ -322,14 +528,17 @@ auto handlePacket(TtpState &state, network::Packet packet,
   return true;
 }
 
-void handleClientConnection(network::TcpSocket clientSocket,
+void handleClientConnection(network::TcpSocket clientSocketRaw,
                             std::string_view clientName, TtpState &state,
                             const crypto::RsaKeyPair &ttpKey) {
 
-  logzy::trace("{} socket fd: {}", clientName, clientSocket.getFd());
+  auto clientSocket =
+      std::make_shared<network::TcpSocket>(std::move(clientSocketRaw));
+
+  logzy::trace("{} socket fd: {}", clientName, clientSocket->getFd());
 
   while (true) {
-    auto res = clientSocket.receive();
+    auto res = clientSocket->receive();
     if (!res) {
       logzy::error("Couldn't receive from client. {}", res.error());
       continue;
@@ -381,7 +590,7 @@ auto main(int argc, const char *const *const argv) -> int {
 
     if (auto client = server.accept()) {
 
-      std::string clientName = "Client " + std::to_string(1);
+      std::string clientName = "Client " + std::to_string(++clientCounter);
       threadHandles.emplace_back(handleClientConnection, std::move(*client),
                                  clientName, std::ref(state),
                                  std::cref(ttpRsaKey));
