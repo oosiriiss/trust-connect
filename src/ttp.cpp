@@ -7,10 +7,15 @@
 #include "network/packet.hpp"
 #include "network/socket.hpp"
 #include <print>
+#include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
+#include <vector>
 
 namespace {
+
+std::mutex clientRegistryMutex;
 
 enum class OptionKey {
   BindPort,
@@ -110,12 +115,11 @@ auto handleTradePublicKeys(TtpState &state, network::TcpSocket &client,
     return false;
   }
 
-  // TODO :: Save the clietnKeyPair somewhere
-
-  DEBUG_ASSERT(!state.clientsPublicKeys.contains(clientName));
-  state.clientsPublicKeys.emplace(clientName, std::move(clientKeyPair));
-
-  logzy::trace("Sending TTP's public key PEM to the {}", clientName);
+  {
+    std::lock_guard lock{clientRegistryMutex};
+    DEBUG_ASSERT(!state.clientsPublicKeys.contains(clientName));
+    state.clientsPublicKeys.emplace(clientName, std::move(clientKeyPair));
+  }
 
   std::string ttpPublicKeyPem;
   if (auto publicKeyResult = ttpKey.publicKeyPem()) {
@@ -125,12 +129,16 @@ auto handleTradePublicKeys(TtpState &state, network::TcpSocket &client,
     return false;
   }
 
+  logzy::trace("Sending TTP's public key PEM to the {}.PEM:\n{}", clientName,
+               ttpPublicKeyPem);
+
   if (auto err = client.send(network::Packet{
           .type = network::PacketType::TradePublicKeysWithTtpResponse,
           .payload = {
               {"public_key_pem", std::move(ttpPublicKeyPem)},
           }})) {
-    logzy::error("Couldn't send TTP's public key pem to the {}", clientName);
+    logzy::error("Couldn't send TTP's public key pem to the {}. {}", clientName,
+                 *err);
     return false;
   }
 
@@ -178,37 +186,56 @@ auto handleRegister(TtpState &state, network::TcpSocket &client,
   return true;
 }
 
-auto receiveClient(TtpState &state, network::TcpSocket &client,
-                   std::string_view clientName,
-                   const crypto::RsaKeyPair &ttpKey) -> bool {
+auto handlePacket(TtpState &state, network::Packet packet,
+                  network::TcpSocket &client, std::string_view clientName,
+                  const crypto::RsaKeyPair &ttpKey) -> bool {
 
-  logzy::trace("Waiting for {} to send data", clientName);
-
-  if (auto received = client.receive()) {
-    logzy::info("Received packet with type: {}", received->type);
-    logzy::trace("Payload:\n{}", received->payload.dump());
-
-    switch (received->type) {
-    case network::PacketType::TradePublicKeysWithTtpRequest:
-      return handleTradePublicKeys(state, client, clientName, ttpKey,
-                                   received->payload);
-    case network::PacketType::RegisterRequest:
-      return handleRegister(state, client, clientName, ttpKey,
-                            received->payload);
-      break;
-    case network::PacketType::CloseConnection:
-      return false;
-    case network::PacketType::__SizeGuard:
-      [[fallthrough]];
-    case network::PacketType::RegisterResponse:
-      [[fallthrough]];
-    case network::PacketType::TradePublicKeysWithTtpResponse:
-      logzy::error("Invalid packet received: {}", received->type);
-      return false;
-      break;
-    }
+  switch (packet.type) {
+  case network::PacketType::TradePublicKeysWithTtpRequest:
+    return handleTradePublicKeys(state, client, clientName, ttpKey,
+                                 packet.payload);
+  case network::PacketType::RegisterRequest:
+    return handleRegister(state, client, clientName, ttpKey, packet.payload);
+    break;
+  case network::PacketType::CloseConnection:
+    return false;
+  case network::PacketType::__SizeGuard:
+    [[fallthrough]];
+  case network::PacketType::RegisterResponse:
+    [[fallthrough]];
+  case network::PacketType::TradePublicKeysWithTtpResponse:
+    logzy::error("Invalid packet received: {}", packet.type);
+    return false;
+    break;
   }
   return true;
+}
+
+void handleClientConnection(network::TcpSocket clientSocket,
+                            std::string_view clientName, TtpState &state,
+                            const crypto::RsaKeyPair &ttpKey) {
+
+  logzy::trace("{} socket fd: {}", clientName, clientSocket.getFd());
+
+  while (true) {
+    auto res = clientSocket.receive();
+    if (!res) {
+      logzy::error("Couldn't receive from client. {}", res.error());
+      continue;
+    }
+
+    if (res->type == network::PacketType::CloseConnection) {
+      break;
+    }
+
+    logzy::info("Received packet with type: {}", res->type);
+    logzy::trace("Payload:\n{}", res->payload.dump());
+
+    handlePacket(state, std::move(*res), clientSocket, clientName, ttpKey);
+
+    logzy::debug("Handled.");
+  }
+  logzy::trace("Connection with {} ended", clientName);
 }
 
 } // namespace
@@ -234,36 +261,23 @@ auto main(int argc, const char *const *const argv) -> int {
     return EXIT_FAILURE;
   }
 
-  logzy::info("Waiting for first client to connect");
-  network::TcpSocket client1;
-  network::TcpSocket client2;
-
-  if (auto connectedClient = server.accept()) {
-    logzy::info("First client connected");
-    client1 = std::move(*connectedClient);
-  } else {
-    logzy::error("First Client connection failed: {}", connectedClient.error());
-  }
-
-  // if (auto connectedClient = server.accept()) {
-  //   logzy::info("Second client connected");
-  //   client2 = std::move(*connectedClient);
-  // } else {
-  //   logzy::error("Second Client connection failed: {}",
-  //                connectedClient.error());
-  // }
-
   TtpState state{};
-
-  logzy::info("Clients connected");
-
+  std::vector<std::jthread> threadHandles;
+  int clientCounter = 0;
   while (true) {
-    if (!receiveClient(state, client1, "Client 1", ttpRsaKey)) {
-      break;
+
+    logzy::info("Waiting for connection");
+
+    if (auto client = server.accept()) {
+
+      std::string clientName = "Client " + std::to_string(1);
+      threadHandles.emplace_back(handleClientConnection, std::move(*client),
+                                 clientName, std::ref(state),
+                                 std::cref(ttpRsaKey));
+
+    } else {
+      logzy::error("Couldn't accept client's connection");
     }
-    // if (!receiveClient(client2, "Client 2")) {
-    //   break;
-    // }
   }
 
   return 0;
