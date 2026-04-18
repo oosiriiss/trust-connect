@@ -46,9 +46,11 @@ struct StringCompare {
 struct TtpState {
   std::unordered_map<std::string, crypto::RsaKeyPair, StringHash, StringCompare>
       clientsPublicKeys;
-  std::unordered_map<std::string, std::weak_ptr<network::TcpSocket>>
+  std::unordered_map<std::string, std::weak_ptr<network::TcpSocket>, StringHash,
+                     StringCompare>
       pendingAuthentications;
-  std::unordered_map<std::string, std::weak_ptr<network::TcpSocket>>
+  std::unordered_map<std::string, std::weak_ptr<network::TcpSocket>, StringHash,
+                     StringCompare>
       connectedClients;
 };
 
@@ -398,7 +400,7 @@ auto findServerId(const TtpState &state, std::string_view clientId)
                          "the server disconnected");
 }
 
-auto handleUserAuthDataSubmit(const TtpState &state,
+auto handleUserAuthDataSubmit(TtpState &state,
                               const std::shared_ptr<network::TcpSocket> &client,
                               const network::Packet &packet,
                               std::string_view clientName,
@@ -481,6 +483,20 @@ auto handleUserAuthDataSubmit(const TtpState &state,
       return false;
     }
 
+    logzy::trace("Closing server and client");
+    server->close();
+    client->close();
+
+    logzy::trace("Removing clients public keys");
+    state.clientsPublicKeys.erase(state.clientsPublicKeys.find(serverId));
+    state.clientsPublicKeys.erase(state.clientsPublicKeys.find(id));
+
+    logzy::trace("Removing connected clients");
+    state.connectedClients.erase(state.connectedClients.find(serverId));
+    state.connectedClients.erase(state.connectedClients.find(id));
+
+    logzy::trace("Removing pedning authentications");
+    state.pendingAuthentications.erase(id);
   } else {
     logzy::error(
         "Server that was waiting for authentication closed connection.");
@@ -490,7 +506,7 @@ auto handleUserAuthDataSubmit(const TtpState &state,
   return true;
 }
 
-auto handlePacket(TtpState &state, network::Packet packet,
+auto handlePacket(TtpState &state, const network::Packet &packet,
                   std::shared_ptr<network::TcpSocket> &client,
                   std::string_view clientName, const crypto::RsaKeyPair &ttpKey)
     -> bool {
@@ -541,7 +557,7 @@ void handleClientConnection(network::TcpSocket clientSocketRaw,
     auto res = clientSocket->receive();
     if (!res) {
       logzy::error("Couldn't receive from client. {}", res.error());
-      continue;
+      break;
     }
 
     if (res->type == network::PacketType::CloseConnection) {
@@ -551,11 +567,21 @@ void handleClientConnection(network::TcpSocket clientSocketRaw,
     logzy::info("Received packet with type: {}", res->type);
     logzy::trace("Payload:\n{}", res->payload.dump());
 
-    handlePacket(state, std::move(*res), clientSocket, clientName, ttpKey);
+    auto result = handlePacket(state, *res, clientSocket, clientName, ttpKey);
+    if (res->type == network::PacketType::UserAuthDataSubmit && result) {
+      logzy::info("TTP's role is finished. cleaning up");
+      break;
+    }
 
     logzy::debug("Handled.");
   }
   logzy::trace("Connection with {} ended", clientName);
+  logzy::trace("state.clientsPublicKeys.size() = {}",
+               state.clientsPublicKeys.size());
+  logzy::trace("state.pendingAuthentications.size() = {}",
+               state.pendingAuthentications.size());
+  logzy::trace("state.connectedClients.size() = {}",
+               state.connectedClients.size());
 }
 
 } // namespace
