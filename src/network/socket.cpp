@@ -4,6 +4,7 @@
 #include "logzy/logzy.hpp"
 #include "network/packet.hpp"
 #include <arpa/inet.h>
+#include <asm-generic/socket.h>
 #include <expected>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -84,7 +85,7 @@ auto TcpSocket::connect(const std::string &host, std::uint16_t port) noexcept
   size_t sent = 0;
   while (sent < packetBytesLeft) {
 
-    const size_t sentNow =
+    const ssize_t sentNow =
         ::send(fd_, dataPtr + sent, packetBytesLeft, MSG_NOSIGNAL);
 
     if (sentNow <= 0) {
@@ -161,6 +162,8 @@ void TcpServer::close() noexcept { closeSocket(fd_); }
     return std::optional(std::format("Couldn't create socket for server.err:{}",
                                      std::system_category().message(errno)));
   }
+  const int opt = 1;
+  setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
   logzy::trace("Serve socket created");
 
   sockaddr_in addr{};
