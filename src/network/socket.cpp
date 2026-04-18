@@ -78,15 +78,13 @@ auto TcpSocket::connect(const std::string &host, std::uint16_t port) noexcept
     return std::optional<std::string>(std::move(serialized.error()));
   }
 
-  size_t packetBytesLeft = dataToSend.size() * sizeof(packet);
+  size_t packetBytesLeft = dataToSend.size();
   const auto *dataPtr =
       reinterpret_cast<const std::uint8_t *>(dataToSend.data()); // NOLINT
 
-  size_t sent = 0;
-  while (sent < packetBytesLeft) {
+  while (packetBytesLeft > 0) {
 
-    const ssize_t sentNow =
-        ::send(fd_, dataPtr + sent, packetBytesLeft, MSG_NOSIGNAL);
+    const ssize_t sentNow = ::send(fd_, dataPtr, packetBytesLeft, MSG_NOSIGNAL);
 
     if (sentNow <= 0) {
       return std::optional(std::format("Couldn't send packet: '{}'. Error: {}",
@@ -95,6 +93,7 @@ auto TcpSocket::connect(const std::string &host, std::uint16_t port) noexcept
     }
 
     DEBUG_ASSERT(sentNow <= packetBytesLeft);
+    dataPtr += sentNow; // NOLINT
     packetBytesLeft -= sentNow;
   }
 

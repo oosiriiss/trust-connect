@@ -35,6 +35,8 @@ public:
 
   friend class TcpServer;
 
+  [[nodiscard]] constexpr auto getFd() const noexcept -> int { return fd_; }
+
 private:
   int fd_{INVALID_SOCKET};
 };
