@@ -10,6 +10,7 @@ struct evp_pkey_st;
 struct bio_st;
 struct evp_pkey_ctx_st;
 struct evp_md_ctx_st;
+struct evp_cipher_ctx_st;
 }
 
 namespace crypto::openssl {
@@ -48,7 +49,8 @@ struct KeyCtxDeleter {
 };
 
 } // namespace internal
-using KeyCtxPointer = std::unique_ptr<internal::KeyCtx, internal::KeyCtxDeleter>;
+using KeyCtxPointer =
+    std::unique_ptr<internal::KeyCtx, internal::KeyCtxDeleter>;
 
 namespace internal {
 using MdCtx = struct ::evp_md_ctx_st;
@@ -58,5 +60,16 @@ struct MdCtxDeleter {
 
 } // namespace internal
 using MdCtxPointer = std::unique_ptr<internal::MdCtx, internal::MdCtxDeleter>;
+
+namespace internal {
+using CipherCtx = struct ::evp_cipher_ctx_st;
+struct CipherCtxDeleter {
+  void operator()(CipherCtx *ctx) const noexcept;
+};
+
+} // namespace internal
+
+using CipherCtxPointer =
+    std::unique_ptr<internal::CipherCtx, internal::CipherCtxDeleter>;
 
 } // namespace crypto::openssl

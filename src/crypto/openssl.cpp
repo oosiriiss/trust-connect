@@ -41,10 +41,15 @@ template <std::size_t Bytes>
 }
 
 // Explicit instantiations
+template auto generateRandomBytes<12>()
+    -> std::expected<static_string<12>, std::string>;
+
 template auto generateRandomBytes<16>()
     -> std::expected<static_string<16>, std::string>;
+
 template auto generateRandomBytes<32>()
     -> std::expected<static_string<32>, std::string>;
+
 template auto generateRandomBytes<64>()
     -> std::expected<static_string<64>, std::string>;
 
@@ -88,5 +93,19 @@ void MdCtxDeleter::operator()(MdCtx *ctx) const noexcept {
 }
 
 } // namespace internal
+
+namespace internal {
+using CipherCtx = struct ::evp_cipher_ctx_st;
+void CipherCtxDeleter::operator()(CipherCtx *ctx) const noexcept {
+  if (ctx == nullptr) {
+    return;
+  }
+
+  EVP_CIPHER_CTX_free(ctx);
+}
+
+} // namespace internal
+using CipherCtxPointer =
+    std::unique_ptr<internal::CipherCtx, internal::CipherCtxDeleter>;
 
 } // namespace crypto::openssl
