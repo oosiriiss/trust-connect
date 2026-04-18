@@ -2,10 +2,12 @@
 #include "cppli/cppli.hpp"
 #include "cppli/vendor/debug_utils.hpp"
 #include "crypto/base64.hpp"
+#include "crypto/crypto.hpp"
 #include "crypto/rsa.hpp"
 #include "logzy/logzy.hpp"
 #include "network/packet.hpp"
 #include "network/socket.hpp"
+#include <chrono>
 #include <print>
 #include <string>
 #include <string_view>
@@ -160,22 +162,16 @@ auto handleRegister(TtpState &state, network::TcpSocket &client,
 
   logzy::trace("Base64 encoded ID: {}", encryptedId);
 
-  if (auto baseResult = crypto::base64Decode(encryptedId)) {
-    id = std::move(*baseResult);
+  if (auto result = crypto::decodeAndDecrypt(encryptedId, ttpKey)) {
+    id = std::move(*result);
   } else {
-    logzy::error("Couldnt base64 decode id. {}", baseResult.error());
-    return false;
-  }
-
-  logzy::trace("Encrypted ID: {}", id);
-  if (auto idResult = ttpKey.decryptPrivate(id)) {
-    id = std::move(*idResult);
-  } else {
-    logzy::error("Couldn't decrypt ID. {}", idResult.error());
+    logzy::error("Couldnt decrypt {} ID: {}", clientName, result.error());
     return false;
   }
   logzy::trace("Decrypted ID: {}", id);
 
+  logzy::debug("Client '{}' found. Replacing it's clientName key with it's ID",
+               clientName);
   auto it = state.clientsPublicKeys.find(clientName);
   if (it == state.clientsPublicKeys.end()) {
     logzy::error("{} tried to register without trading public keys",
@@ -183,6 +179,113 @@ auto handleRegister(TtpState &state, network::TcpSocket &client,
     return false;
   }
 
+  logzy::debug("Replacing internal key clientName for it's id");
+
+  {
+    std::lock_guard lock{clientRegistryMutex};
+    logzy::trace("Finding if node with given id already exists.");
+    if (state.clientsPublicKeys.contains(id)) {
+      logzy::error("Entry with key {} already exists!", id);
+      return false;
+    }
+    logzy::trace(
+        "Key with id is not taken. Extracting the old node with key {}",
+        clientName);
+    auto node = state.clientsPublicKeys.extract(std::string{clientName});
+    if (node.empty()) {
+      logzy::error("Couldn't find node with key {}", clientName);
+      return false;
+    }
+    logzy::trace("Extracted. Switching keys from {} to {}", clientName, id);
+    node.key() = std::move(id);
+    logzy::trace("Inserting the node back");
+
+    state.clientsPublicKeys.insert(std::move(node));
+    logzy::trace("Done.");
+  }
+
+  return true;
+}
+
+auto handleServerAuthRequest(const TtpState &state,
+                             const network::TcpSocket &client,
+                             const network::Packet &packet,
+                             std::string_view clientName,
+                             const crypto::RsaKeyPair &ttpKey) -> bool {
+  logzy::trace("{} Authenticating server", clientName);
+
+  // TODO :: client validation will happen later maybe validating the client
+  // here is redundant
+
+  std::string userId = packet.payload.value("user_id", "");
+  std::string serverId = packet.payload.value("server_id", "");
+
+  if (userId.empty()) {
+    logzy::error("user_id was not provided as payload json key");
+    return false;
+  }
+  if (serverId.empty()) {
+    logzy::error("server_id was not provided as payload json key");
+    return false;
+  }
+
+  if (auto decryptedUser = crypto::decodeAndDecrypt(userId, ttpKey)) {
+    userId = std::move(*decryptedUser);
+  } else {
+    logzy::error("couldnt' decrypt user ID. {}", decryptedUser.error());
+    return false;
+  }
+
+  logzy::trace("Decrypted user id:{}", userId);
+
+  if (auto decryptedServer = crypto::decodeAndDecrypt(serverId, ttpKey)) {
+    serverId = std::move(*decryptedServer);
+  } else {
+    logzy::error("couldnt' decrypt user ID. {}", decryptedServer.error());
+    return false;
+  }
+
+  logzy::trace("Decrypted server id:{}", serverId);
+  logzy::debug("Checking if users are registered");
+
+  if (!state.clientsPublicKeys.contains(userId)) {
+    logzy::error("user with id {} is not registered to the ttp", userId);
+    return false;
+  }
+
+  if (!state.clientsPublicKeys.contains(serverId)) {
+    logzy::error("server with id {} is not registered to the ttp", serverId);
+    return false;
+  }
+
+  auto timestamp = std::chrono::system_clock::now().time_since_epoch().count();
+
+  std::string message = std::format("TTPChallenge:{}", timestamp);
+  std::string messageSignature;
+  if (auto signResult = ttpKey.sign(message)) {
+    messageSignature = std::move(*signResult);
+  } else {
+    logzy::error("Couldn't create a signature for TTP message. {}",
+                 signResult.error());
+    return false;
+  }
+
+  if (auto encodeResult = crypto::base64Encode(messageSignature)) {
+    messageSignature = std::move(*encodeResult);
+  } else {
+    logzy::error("Couldn't base64 encode the message {}", messageSignature);
+    return false;
+  }
+
+  if (auto err = client.send(network::Packet{
+          .type = network::PacketType::ServerAuthOk,
+          .payload = {{"message", std::move(message)},
+                      {"signature", std::move(messageSignature)}}})) {
+    logzy::error("Couldn't send data to client {}. {}", clientName, *err);
+    return false;
+  }
+
+  logzy::trace("{} Server authenticated", clientName);
   return true;
 }
 
@@ -196,9 +299,16 @@ auto handlePacket(TtpState &state, network::Packet packet,
                                  packet.payload);
   case network::PacketType::RegisterRequest:
     return handleRegister(state, client, clientName, ttpKey, packet.payload);
-    break;
+  case network::PacketType::ServerAuthRequest:
+    return handleServerAuthRequest(state, client, packet, clientName, ttpKey);
   case network::PacketType::CloseConnection:
     return false;
+  case network::PacketType::UserAuthRedirect:
+    [[fallthrough]];
+  case network::PacketType::ServiceRequest:
+    [[fallthrough]];
+  case network::PacketType::ServerAuthOk:
+    [[fallthrough]];
   case network::PacketType::__SizeGuard:
     [[fallthrough]];
   case network::PacketType::RegisterResponse:
@@ -206,6 +316,7 @@ auto handlePacket(TtpState &state, network::Packet packet,
   case network::PacketType::TradePublicKeysWithTtpResponse:
     logzy::error("Invalid packet received: {}", packet.type);
     return false;
+    break;
     break;
   }
   return true;

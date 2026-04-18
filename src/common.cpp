@@ -1,5 +1,6 @@
 #include "common.hpp"
 #include "crypto/base64.hpp"
+#include "crypto/crypto.hpp"
 #include "crypto/hash.hpp"
 #include "crypto/rsa.hpp"
 #include "logzy/logzy.hpp"
@@ -83,23 +84,19 @@
 
   std::optional<crypto::RsaKeyPair> ttpPublicKey{std::move(*keyResult)};
 
-  auto encryptedId = ttpPublicKey->encryptPublic(crypto::hashToHex(id));
+  std::string encryptedId;
 
-  if (!encryptedId) {
-    logzy::error("Couldnt' encrypt ID. {}", encryptedId.error());
-    return std::nullopt;
-  }
-
-  if (auto baseResult = crypto::base64Encode(*encryptedId)) {
-    encryptedId = std::move(*baseResult);
+  if (auto encryptResult =
+          crypto::encryptAndEncode(crypto::hashToHex(id), *ttpPublicKey)) {
+    encryptedId = std::move(*encryptResult);
   } else {
-    logzy::error("Couldnt base64 id. {}", baseResult.error());
+    logzy::error("Error occurred. {}", encryptResult.error());
     return std::nullopt;
   }
 
   if (auto err = socket.send(network::Packet{
           .type = network::PacketType::RegisterRequest,
-          .payload = {{"id", *encryptedId}},
+          .payload = {{"id", encryptedId}},
       })) {
     logzy::error("Couldn't send {} to TTP. {}",
                  network::PacketType::RegisterRequest, *err);

@@ -1,7 +1,9 @@
 
 #include "client/application.hpp"
 #include "common.hpp"
+#include "crypto/base64.hpp"
 #include "crypto/crypto.hpp"
+#include "crypto/hash.hpp"
 #include "crypto/rsa.hpp"
 #include "imgui.h"
 #include "network/packet.hpp"
@@ -23,10 +25,100 @@ enum class AppStage {
 };
 
 struct AppState {
+  static_string<32> clientName;
   crypto::Hash32 id{};
-  AppStage stage{AppStage::GeneratingID};
   std::string errorMessage;
+  AppStage stage{AppStage::GeneratingID};
 };
+
+void estabilishSession(network::TcpSocket &serverSocket,
+                       network::TcpSocket &ttpSocket,
+                       const crypto::RsaKeyPair &ttpPublicKey,
+                       const crypto::Hash32 &id) {
+
+  logzy::debug("Requesting service from server");
+  logzy::trace("Encrypting user id with ttp's public key");
+  logzy::trace("User id: {}", crypto::hashToHex(id));
+  std::string userId;
+  if (auto idResult =
+          crypto::encryptAndEncode(crypto::hashToHex(id), ttpPublicKey)) {
+    userId = std::move(*idResult);
+  } else {
+    logzy::error("Couldn't encrypt user's id. {}", idResult.error());
+    return;
+  }
+
+  if (auto err = serverSocket.send(
+          network::Packet{.type = network::PacketType::ServiceRequest,
+                          .payload = {
+                              {"id", userId},
+                          }})) {
+
+    logzy::error("ServiceRequest failed. {}", *err);
+    return;
+  }
+
+  logzy::debug("Waiting for TTP response forwarded by server.");
+
+  // TODO :: Add certificates
+
+  if (auto packet = serverSocket.receive()) {
+    if (packet->type != network::PacketType::ServerAuthOk) {
+      logzy::error(
+          "Received wrong type of packet. {} and expected ServerAuthResponse",
+          packet->type);
+      return;
+    }
+
+    // Veriying
+    const auto message = packet->payload.value("message", std::string_view{""});
+    std::string signature = packet->payload.value("signature", "");
+
+    if (message.empty()) {
+      logzy::error("Server empty message during authentication");
+      return;
+    }
+
+    if (signature.empty()) {
+      logzy::error("Server empty signature during authentication");
+      return;
+    }
+
+    if (auto decodeResult = crypto::base64Decode(signature)) {
+      signature = std::move(*decodeResult);
+    } else {
+      logzy::error("Couldn't base64 decode the signature. {}",
+                   decodeResult.error());
+    }
+
+    if (auto result = ttpPublicKey.verify(message, signature); !result) {
+
+      logzy::error("Couldn't validate message and signature. {}",
+                   result.error());
+      return;
+    }
+
+  } else {
+    logzy::error("Receiving failed. {}", packet.error());
+    return;
+  }
+
+  // User  auth redirect happens here
+
+  if (auto packet = ttpSocket.receive()) {
+    if (packet->type != network::PacketType::UserAuthRedirect) {
+      logzy::error(
+          "Received wrong type of packet. {} and expected UserAuthRedirect",
+          packet->type);
+      return;
+    }
+
+  } else {
+    logzy::error("Receving failed. {}", packet.error());
+    return;
+  }
+}
+
 } // namespace
 
 auto main(int argc, char const *const *const argv) -> int {
@@ -122,41 +214,10 @@ auto main(int argc, char const *const *const argv) -> int {
 
       case AppStage::Registered: {
 
-        if (!state.errorMessage.empty()) {
-          ImGui::Text("Error: %s", state.errorMessage.c_str());
+        if (ImGui::Button("Request service")) {
+          estabilishSession(serverSocket, ttpSocket, ttpPublicKey, state.id);
         }
 
-        if (ImGui::Button("Send data")) {
-          nlohmann::json payload;
-          payload["value"] = "Hello";
-          if (auto err = serverSocket.send(
-                  network::Packet{.type = network::PacketType::RegisterRequest,
-                                  .payload = std::move(payload)})) {
-            logzy::error("Couldn't send data: {}", *err);
-          }
-        }
-
-        if (ImGui::Button("Receive data")) {
-          if (auto received = serverSocket.receive()) {
-            logzy::info("Received: {}", *received);
-
-            switch (received->type) {
-            case network::PacketType::RegisterResponse:
-              break;
-            case network::PacketType::CloseConnection:
-              logzy::info("Client disconnected");
-              glfwSetWindowShouldClose(ctx.window, 1);
-              break;
-            default:
-              logzy::error("Invalid packet received: {}", received->type);
-              break;
-            }
-
-          } else {
-            logzy::error("Couldn't receive message from server: {}",
-                         received.error());
-          }
-        }
       } break;
       }
     }

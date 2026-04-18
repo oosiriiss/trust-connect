@@ -11,6 +11,10 @@ enum class PacketType : std::int8_t {
   TradePublicKeysWithTtpResponse,
   RegisterRequest,
   RegisterResponse,
+  ServiceRequest,
+  ServerAuthRequest,
+  ServerAuthOk,
+  UserAuthRedirect,
   CloseConnection,
   __SizeGuard, // NOLINT
 };
@@ -37,13 +41,19 @@ template <> struct std::formatter<network::PacketType> {
   static auto format(const network::PacketType t, std::format_context &ctx) {
     using Type = network::PacketType;
     static std::unordered_map<Type, const char *> mappings{
-        {Type::TradePublicKeysWithTtpRequest, "TradePublicKeysWithTtpRequest"},
+
+        {Type::TradePublicKeysWithTtpRequest,
+         "Type::TradePublicKeysWithTtpRequest"},
         {Type::TradePublicKeysWithTtpResponse,
-         "TradePublicKeysWithTtpResponse"},
-        {Type::RegisterRequest, "RegisterRequest"},
-        {Type::RegisterResponse, "RegisterResponse"},
-        {Type::CloseConnection, "CloseConnection"},
-        {Type::__SizeGuard, "__SizeGuard"},
+         "Type::TradePublicKeysWithTtpResponse"},
+        {Type::RegisterRequest, "Type::RegisterRequest"},
+        {Type::RegisterResponse, "Type::RegisterResponse"},
+        {Type::ServiceRequest, "Type::ServiceRequest"},
+        {Type::ServerAuthRequest, "Type::ServerAuthRequest"},
+        {Type::ServerAuthOk, "Type::ServerAuthOk"},
+        {Type::UserAuthRedirect, "Type::UserAuthRedirect"},
+        {Type::CloseConnection, "Type::CloseConnection"},
+        {Type::__SizeGuard, "Type::__SizeGuard"},
     };
 
     return std::format_to(ctx.out(), "{}", mappings[t]);

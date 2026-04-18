@@ -1,6 +1,7 @@
 #include "common.hpp"
 #include "constants.hpp"
 #include "cppli/cppli.hpp"
+#include "crypto/base64.hpp"
 #include "crypto/crypto.hpp"
 #include "crypto/hash.hpp"
 #include "crypto/rsa.hpp"
@@ -91,6 +92,78 @@ auto parseCommandlineArgs(AppContext &ctx, int argc,
   return false;
 }
 
+void estabilishConnection(network::TcpSocket &clientSocket,
+                          network::TcpSocket &ttpSocket,
+                          const nlohmann::json &requestPayload,
+                          const crypto::Hash32 &serverID,
+                          const crypto::RsaKeyPair &ttpKey) {
+  // Service request sent
+
+  logzy::debug("estabilishConnection");
+  const auto userEncryptedId = requestPayload.value("id", "");
+  if (userEncryptedId.empty()) {
+    logzy::error("Client' didnt supply id with ServiceRequest");
+    return;
+  }
+
+  logzy::trace("Encrypted user ID: {}", userEncryptedId);
+  logzy::trace("Encrypting server id");
+
+  std::string encryptedServerID;
+  if (auto encryptedServerIDResult =
+          ttpKey.encryptPublic(crypto::hashToHex(serverID))) {
+
+    logzy::trace("Encrypted server ID: {}", *encryptedServerIDResult);
+    logzy::trace("Base64 encoding encrypte dserver id");
+    if (auto basedServerID = crypto::base64Encode(*encryptedServerIDResult)) {
+      logzy::trace("Base64 Encoded '{}'", *basedServerID);
+      encryptedServerID = std::move(*basedServerID);
+    } else {
+      logzy::error("Couldn't Base64 server ID. {}", basedServerID.error());
+      return;
+    }
+
+  } else {
+    logzy::error("Coulndt' encrypt server id with ttp's public key. {}",
+                 encryptedServerIDResult.error());
+    return;
+  }
+
+  if (auto err = ttpSocket.send(network::Packet{
+          .type = network::PacketType::ServerAuthRequest,
+          .payload =
+              {
+                  {"user_id", userEncryptedId},
+                  {"server_id", encryptedServerID},
+              },
+      })) {
+    logzy::error("Couldn't send verification data to TTP server. {}", *err);
+  }
+
+  if (auto ttpVerificationResult = ttpSocket.receive()) {
+    if (ttpVerificationResult->type != network::PacketType::ServerAuthOk) {
+      logzy::error("TTP sent wrong auth packet: {}. Expected ServerAuthOk",
+                   ttpVerificationResult->type);
+      return;
+    }
+
+    // passing to user
+    if (auto err = clientSocket.send(*ttpVerificationResult)) {
+      logzy::error("Couldnt' pass ServerAuthOk to client", *err);
+    }
+  } else {
+    logzy::error("Couldn't receive TTP's verification packet. {}",
+                 ttpVerificationResult.error());
+  }
+
+  // WATITIGN for User auth ok from ttp
+  // WATITIGN for User auth ok from ttp
+  // WATITIGN for User auth ok from ttp
+  // WATITIGN for User auth ok from ttp
+  // WATITIGN for User auth ok from ttp
+  // WATITIGN for User auth ok from ttp
+}
+
 } // namespace
 
 auto main(int argc, const char *const *const argv) -> int {
@@ -143,40 +216,34 @@ auto main(int argc, const char *const *const argv) -> int {
   logzy::info("Binding to port {}", ctx.bindPort);
   network::TcpServer server;
   if (auto err = server.listen(ctx.bindPort)) {
-    logzy::critical("Server listen failed. Reason: {}", *err);
     return EXIT_FAILURE;
   }
 
   logzy::info("Bound");
 
   logzy::info("Waiting for 1 client to connect");
-  auto client = server.accept();
+  auto clientSocket = server.accept();
   logzy::info("Client connected");
 
   while (true) {
-    if (!client) {
-      logzy::error("Accepting client failed: {}", client.error());
+    if (!clientSocket) {
+      logzy::error("Accepting client failed: {}", clientSocket.error());
       continue;
     }
     logzy::info("Client connected!");
 
-    if (auto received = client->receive()) {
+    if (auto received = clientSocket->receive()) {
       logzy::info("Received: {}", *received);
 
       if (received->type == network::PacketType::CloseConnection) {
         break;
       }
 
-      nlohmann::json payload;
-      payload["value_response"] = received->payload["value"];
-      auto packet =
-          network::Packet{.type = network::PacketType::RegisterResponse,
-                          .payload = std::move(payload)};
-
-      // Echo
-      if (auto err = client->send(packet)) {
-        logzy::error("Couldn't send send echo messge to client. {}", *err);
+      if (received->type == network::PacketType::ServiceRequest) {
+        estabilishConnection(*clientSocket, ttpSocket, received->payload,
+                             ctx.id, ttpPublicKey);
       }
+
     } else {
       logzy::error("Couldn't receive message from client: {}",
                    received.error());
