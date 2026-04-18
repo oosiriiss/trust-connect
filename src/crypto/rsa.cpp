@@ -2,6 +2,7 @@
 #include "crypto/openssl.hpp"
 #include "logzy/logzy.hpp"
 #include <expected>
+#include <fcntl.h>
 #include <openssl/bio.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -92,6 +93,92 @@ auto RsaKeyPair::fromPrivatePem(std::string_view privatePem)
   return RsaKeyPair{.rawKey = std::move(key)};
 }
 
+auto RsaKeyPair::sign(std::string_view data) const noexcept
+    -> std::expected<std::string, std::string> {
+
+  logzy::debug("Signing data with size: {}", data.size());
+  logzy::trace("Signed data: {}", data);
+
+  auto ctx = openssl::MdCtxPointer{EVP_MD_CTX_new()};
+  if (ctx == nullptr) {
+    return std::unexpected(std::format(
+        "Couldn't create message digest context. {}", openssl::getError()));
+  }
+  logzy::trace("Generated context");
+
+  if (EVP_DigestSignInit(ctx.get(), nullptr, EVP_sha256(), nullptr,
+                         rawKey.get()) <= 0) {
+    return std::unexpected(std::format(
+        "Couldn't initialize digest sign context. {}", openssl::getError()));
+  }
+  logzy::trace("Initialized digest sign context");
+
+  logzy::trace("Querying for size");
+  size_t signLength = 0;
+  if (EVP_DigestSign(ctx.get(), nullptr, &signLength,
+                     reinterpret_cast<const unsigned char *>(data.data()),
+                     data.size()) <= 0) {
+    return std::unexpected(std::format("Querying for digest size failed. {}",
+                                       openssl::getError()));
+  }
+  logzy::trace("Digest size: {}", signLength);
+
+  std::expected<std::string, std::string> sign{
+      std::string(signLength + 5, '\0')};
+
+  if (EVP_DigestSign(ctx.get(), reinterpret_cast<unsigned char *>(sign->data()),
+                     &signLength,
+                     reinterpret_cast<const unsigned char *>(data.data()),
+                     data.size()) <= 0) {
+    return std::unexpected(
+        std::format("Signing failed. {}", openssl::getError()));
+  }
+
+  sign->resize(signLength);
+  logzy::debug("Successfully signed");
+  return sign;
+}
+
+auto RsaKeyPair::verify(std::string_view data,
+                        std::string_view signature) const noexcept
+    -> std::expected<void, std::string> {
+  logzy::debug("Verifying signature");
+  logzy::trace("Signature: '{}'\nData size:\n '{}'", signature, data.size());
+
+  auto ctx = openssl::MdCtxPointer{EVP_MD_CTX_new()};
+  if (ctx == nullptr) {
+    return std::unexpected(std::format(
+        "Couldn't create message digest context. {}", openssl::getError()));
+  }
+  logzy::trace("Generated context");
+
+  if (EVP_DigestVerifyInit(ctx.get(), nullptr, EVP_sha256(), nullptr,
+                           rawKey.get()) <= 0) {
+    return std::unexpected(std::format("Couldn't intialize verification. {}",
+                                       openssl::getError()));
+  }
+  logzy::trace("Initialzied digest context");
+
+  const int result = EVP_DigestVerify(
+      ctx.get(), reinterpret_cast<const unsigned char *>(signature.data()),
+      signature.size(), reinterpret_cast<const unsigned char *>(data.data()),
+      data.size());
+
+  logzy::trace("Verified. result = {}", result);
+
+  if (result < 0) {
+    return std::unexpected(std::format("Error occurred during verification. {}",
+                                       openssl::getError()));
+  }
+
+  if (result == 0) {
+    return std::unexpected("Verification failed. The signature doesn't match.");
+  }
+
+  logzy::debug("Verification success");
+  return {};
+}
+
 auto RsaKeyPair::publicKeyPem() const
     -> std::expected<std::string, std::string> {
   auto bio = openssl::BioPointer{BIO_new(BIO_s_mem())};
@@ -152,7 +239,7 @@ auto RsaKeyPair::privateKeyPem() const
     -> std::expected<std::string, std::string> {
   logzy::trace("Encrypting: '{}'", plain);
 
-  auto ctx = openssl::CtxPointer{EVP_PKEY_CTX_new(rawKey.get(), nullptr)};
+  auto ctx = openssl::KeyCtxPointer{EVP_PKEY_CTX_new(rawKey.get(), nullptr)};
   if (ctx == nullptr) {
     return std::unexpected(std::string("Couldn't create context to decrypt"));
   }
@@ -204,7 +291,7 @@ auto RsaKeyPair::privateKeyPem() const
     -> std::expected<std::string, std::string> {
   logzy::trace("Decrypting: '{}'", cipher);
 
-  auto ctx = openssl::CtxPointer{EVP_PKEY_CTX_new(rawKey.get(), nullptr)};
+  auto ctx = openssl::KeyCtxPointer{EVP_PKEY_CTX_new(rawKey.get(), nullptr)};
   if (ctx == nullptr) {
     return std::unexpected(std::string("Couldn't create context to decrypt"));
   }

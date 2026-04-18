@@ -19,6 +19,13 @@ public:
   [[nodiscard]] static auto fromPublicPem(std::string_view publicPem)
       -> std::expected<RsaKeyPair, std::string>;
 
+  [[nodiscard]] auto sign(std::string_view data) const noexcept
+      -> std::expected<std::string, std::string>;
+
+  [[nodiscard]] auto verify(std::string_view data,
+                            std::string_view signature) const noexcept
+      -> std::expected<void, std::string>;
+
   [[nodiscard]] auto publicKeyPem() const
       -> std::expected<std::string, std::string>;
   [[nodiscard]] auto privateKeyPem() const

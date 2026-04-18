@@ -9,6 +9,7 @@ extern "C" {
 struct evp_pkey_st;
 struct bio_st;
 struct evp_pkey_ctx_st;
+struct evp_md_ctx_st;
 }
 
 namespace crypto::openssl {
@@ -41,12 +42,21 @@ struct BioDeleter {
 using BioPointer = std::unique_ptr<internal::Bio, internal::BioDeleter>;
 
 namespace internal {
-using Ctx = struct ::evp_pkey_ctx_st;
-struct CtxDeleter {
-  void operator()(Ctx *ctx) const noexcept;
+using KeyCtx = struct ::evp_pkey_ctx_st;
+struct KeyCtxDeleter {
+  void operator()(KeyCtx *ctx) const noexcept;
 };
 
 } // namespace internal
-using CtxPointer = std::unique_ptr<internal::Ctx, internal::CtxDeleter>;
+using KeyCtxPointer = std::unique_ptr<internal::KeyCtx, internal::KeyCtxDeleter>;
+
+namespace internal {
+using MdCtx = struct ::evp_md_ctx_st;
+struct MdCtxDeleter {
+  void operator()(MdCtx *ctx) const noexcept;
+};
+
+} // namespace internal
+using MdCtxPointer = std::unique_ptr<internal::MdCtx, internal::MdCtxDeleter>;
 
 } // namespace crypto::openssl

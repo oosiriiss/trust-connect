@@ -69,13 +69,24 @@ void BioDeleter::operator()(Bio *bio) const noexcept {
 } // namespace internal
 
 namespace internal {
-void CtxDeleter::operator()(Ctx *ctx) const noexcept {
+void KeyCtxDeleter::operator()(KeyCtx *ctx) const noexcept {
   if (ctx == nullptr) {
     return;
   }
 
   ::EVP_PKEY_CTX_free(ctx);
 }
+} // namespace internal
+
+namespace internal {
+using MdCtx = struct ::evp_md_ctx_st;
+void MdCtxDeleter::operator()(MdCtx *ctx) const noexcept {
+  if (ctx == nullptr) {
+    return;
+  }
+  EVP_MD_CTX_free(ctx);
+}
 
 } // namespace internal
+
 } // namespace crypto::openssl
