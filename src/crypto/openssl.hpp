@@ -11,6 +11,7 @@ struct bio_st;
 struct evp_pkey_ctx_st;
 struct evp_md_ctx_st;
 struct evp_cipher_ctx_st;
+struct x509_st;
 }
 
 namespace crypto::openssl {
@@ -49,6 +50,11 @@ struct CipherCtxDeleter {
   void operator()(CipherCtx *cipher) const noexcept;
 };
 
+using X509 = struct ::x509_st;
+struct X509Deleter {
+  void operator()(openssl::internal::X509 *cert) const noexcept;
+};
+
 } // namespace internal
 
 using RsaKeyPointer =
@@ -63,5 +69,7 @@ using MdCtxPointer = std::unique_ptr<internal::MdCtx, internal::MdCtxDeleter>;
 
 using CipherCtxPointer =
     std::unique_ptr<internal::CipherCtx, internal::CipherCtxDeleter>;
+
+using X509Pointer = std::unique_ptr<internal::X509, internal::X509Deleter>;
 
 } // namespace crypto::openssl

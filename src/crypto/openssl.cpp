@@ -6,6 +6,7 @@
 #include <openssl/rsa.h>
 
 #include <array>
+#include <openssl/x509.h>
 #include <string_view>
 namespace crypto::openssl {
 auto getError() -> std::string {
@@ -91,6 +92,15 @@ void CipherCtxDeleter::operator()(CipherCtx *cipher) const noexcept {
   }
 
   EVP_CIPHER_CTX_free(cipher);
+}
+
+void X509Deleter::operator()(openssl::internal::X509 *cert) const noexcept {
+
+  if (cert == nullptr) {
+    return;
+  }
+
+  X509_free(cert);
 }
 
 } // namespace internal
