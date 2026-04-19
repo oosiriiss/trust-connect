@@ -6,6 +6,7 @@
 #include "crypto/crypto.hpp"
 #include "crypto/hash.hpp"
 #include "crypto/rsa.hpp"
+#include "crypto/x509.hpp"
 #include "imgui.h"
 #include "network/packet.hpp"
 #include "network/socket.hpp"
@@ -34,6 +35,8 @@ struct AppState {
   std::string errorMessage;
   AppStage stage{AppStage::GeneratingID};
   crypto::Aes256 sessionKey{};
+  crypto::X509Certificate clientCertificate;
+  crypto::X509Certificate ttpCertificate;
   std::vector<std::string> sentMessages;
   std::vector<std::string> serverResponses;
 };
@@ -76,34 +79,7 @@ void estabilishSession(network::TcpSocket &serverSocket,
           packet->type);
       return;
     }
-
-    // Veriying
-    const auto message = packet->payload.value("message", std::string_view{""});
-    std::string signature = packet->payload.value("signature", "");
-
-    if (message.empty()) {
-      logzy::error("Server empty message during authentication");
-      return;
-    }
-
-    if (signature.empty()) {
-      logzy::error("Server empty signature during authentication");
-      return;
-    }
-
-    if (auto decodeResult = crypto::base64Decode(signature)) {
-      signature = std::move(*decodeResult);
-    } else {
-      logzy::error("Couldn't base64 decode the signature. {}",
-                   decodeResult.error());
-    }
-
-    if (auto result = ttpPublicKey.verify(message, signature); !result) {
-
-      logzy::error("Couldn't validate message and signature. {}",
-                   result.error());
-      return;
-    }
+    logzy::trace("Recevied ServerAuthOk");
 
   } else {
     logzy::error("Receiving failed. {}", packet.error());
@@ -315,9 +291,11 @@ auto main(int argc, char const *const *const argv) -> int {
           break;
         }
 
-        if (auto keyOpt = registerWithTtp(ttpSocket, state.id, publicKeyPem)) {
-          ttpPublicKey = std::move(*keyOpt);
-        } else {
+        if (!registerWithTtp(
+                ttpSocket,
+                std::format("Client with id {}", crypto::hashToHex(state.id)),
+                state.id, publicKeyPem, state.clientCertificate,
+                state.ttpCertificate, ttpPublicKey)) {
           break;
         }
         logzy::info("Successfully registerd with TTP");

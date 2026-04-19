@@ -6,10 +6,12 @@
 #include "crypto/crypto.hpp"
 #include "crypto/openssl.hpp"
 #include "crypto/rsa.hpp"
+#include "crypto/x509.hpp"
 #include "logzy/logzy.hpp"
 #include "network/packet.hpp"
 #include "network/socket.hpp"
 #include <chrono>
+#include <cstdlib>
 #include <expected>
 #include <memory>
 #include <print>
@@ -44,6 +46,10 @@ struct StringCompare {
 };
 
 struct TtpState {
+
+  crypto::X509Certificate ttpCertificate;
+  // TODO :: Client public keys could be deleted, and just sent with every
+  // packet needed.
   std::unordered_map<std::string, crypto::RsaKeyPair, StringHash, StringCompare>
       clientsPublicKeys;
   std::unordered_map<std::string, std::weak_ptr<network::TcpSocket>, StringHash,
@@ -165,9 +171,15 @@ auto handleRegister(TtpState &state,
                     const crypto::RsaKeyPair &ttpKey,
                     const nlohmann::json &payload) -> bool {
 
+  auto publicName = payload.value("name", std::string_view{""});
   auto encryptedId = payload.value("id", std::string_view{""});
   if (encryptedId.empty()) {
     logzy::error("Payload must include 'id' field");
+    return false;
+  }
+
+  if (publicName.empty()) {
+    logzy::error("Paylod must include unencrypted name");
     return false;
   }
 
@@ -192,7 +204,47 @@ auto handleRegister(TtpState &state,
     return false;
   }
 
+  logzy::trace("Generting certificate for user");
+
+  crypto::X509Certificate userCert;
+  if (auto certRes =
+          state.ttpCertificate.issue(it->second, publicName, ttpKey)) {
+    userCert = std::move(*certRes);
+  } else {
+    logzy::error("Couldn't create user's certificate.{}", certRes.error());
+  }
+  logzy::trace("Created user certificate for CN '{}'",
+               userCert.getCommonNameSafe());
+
+  logzy::trace("Sending client it's certificate");
+
+  std::string userCertPem;
+  std::string ttpCertPem;
+
+  if (auto res = userCert.toPem()) {
+    userCertPem = std::move(*res);
+  } else {
+    logzy::error("Couldn't convert usercertificate to PEM");
+    return false;
+  }
+
+  if (auto res = state.ttpCertificate.toPem()) {
+    ttpCertPem = std::move(*res);
+  } else {
+    logzy::error("Couldn't convert ttp certificate to PEM");
+    return false;
+  }
+
+  if (auto err = client->send(network::Packet{
+          .type = network::PacketType::RegisterResponse,
+          .payload = {{"certificate_pem", std::move(userCertPem)},
+                      {"ttp_ca_certificate_pem", std::move(ttpCertPem)}}})) {
+    logzy::error("error while sending. {}", *err);
+    return false;
+  }
+
   logzy::trace("Saving client socket to map");
+
   {
     std::lock_guard lock{clientRegistryMutex};
     state.connectedClients.insert({id, std::weak_ptr{client}});
@@ -235,75 +287,70 @@ auto handleServerAuthRequest(
   // TODO :: client validation will happen later maybe validating the client
   // here is redundant
 
-  std::string userId = packet.payload.value("user_id", "");
-  std::string serverId = packet.payload.value("server_id", "");
+  std::string userCertPem = packet.payload.value("user_certificate_pem", "");
+  std::string serverCertPem =
+      packet.payload.value("server_certificate_pem", "");
 
-  if (userId.empty()) {
-    logzy::error("user_id was not provided as payload json key");
+  if (userCertPem.empty()) {
+    logzy::error("user_certificate_pem was not provided as payload json key");
     return false;
   }
-  if (serverId.empty()) {
-    logzy::error("server_id was not provided as payload json key");
+  if (serverCertPem.empty()) {
+    logzy::error("server_certificate_pem was not provided as payload json key");
     return false;
   }
 
-  if (auto decryptedUser = crypto::decodeAndDecrypt(userId, ttpKey)) {
-    userId = std::move(*decryptedUser);
+  crypto::X509Certificate userCert;
+  if (auto cert = crypto::X509Certificate::fromPem(userCertPem)) {
+    userCert = std::move(*cert);
   } else {
-    logzy::error("couldnt' decrypt user ID. {}", decryptedUser.error());
+    logzy::error("couldnt' decrypt user certificate. {}", cert.error());
     return false;
   }
+  logzy::trace("Decrypted user CA:{}", userCert.getCommonNameSafe());
 
-  logzy::trace("Decrypted user id:{}", userId);
-
-  if (auto decryptedServer = crypto::decodeAndDecrypt(serverId, ttpKey)) {
-    serverId = std::move(*decryptedServer);
+  crypto::X509Certificate serverCert;
+  if (auto cert = crypto::X509Certificate::fromPem(serverCertPem)) {
+    serverCert = std::move(*cert);
   } else {
-    logzy::error("couldnt' decrypt user ID. {}", decryptedServer.error());
+    logzy::error("couldnt' decrypt user certificate. {}", cert.error());
     return false;
   }
+  logzy::trace("Decrypted server CA:{}", serverCert.getCommonNameSafe());
 
-  logzy::trace("Decrypted server id:{}", serverId);
-  logzy::debug("Checking if users are registered");
+  logzy::debug("Checking if users are verified");
 
-  if (!state.clientsPublicKeys.contains(userId)) {
-    logzy::error("user with id {} is not registered to the ttp", userId);
-    return false;
-  }
-
-  if (!state.clientsPublicKeys.contains(serverId)) {
-    logzy::error("server with id {} is not registered to the ttp", serverId);
-    return false;
-  }
-
-  auto timestamp = std::chrono::system_clock::now().time_since_epoch().count();
-
-  std::string message = std::format("TTPChallenge:{}", timestamp);
-  std::string messageSignature;
-  if (auto signResult = ttpKey.sign(message)) {
-    messageSignature = std::move(*signResult);
+  logzy::debug("Verifying user certificate");
+  if (auto res = state.ttpCertificate.verify(userCert)) {
+    if (!*res) {
+      logzy::error("User provided invalid ceritficate");
+      return false;
+    }
   } else {
-    logzy::error("Couldn't create a signature for TTP message. {}",
-                 signResult.error());
+    logzy::error("there was an error when verifying user certificate. {}",
+                 res.error());
     return false;
   }
 
-  if (auto encodeResult = crypto::base64Encode(messageSignature)) {
-    messageSignature = std::move(*encodeResult);
+  logzy::debug("Verifying server certificate");
+  if (auto res = state.ttpCertificate.verify(serverCert)) {
+    if (!*res) {
+      logzy::error("User provided invalid ceritficate");
+      return false;
+    }
   } else {
-    logzy::error("Couldn't base64 encode the message {}", messageSignature);
+    logzy::error("there was an error when verifying user certificate. {}",
+                 res.error());
     return false;
   }
 
   if (auto err = serverSocket->send(network::Packet{
-          .type = network::PacketType::ServerAuthOk,
-          .payload = {{"message", std::move(message)},
-                      {"signature", std::move(messageSignature)}}})) {
+          .type = network::PacketType::ServerAuthOk, .payload = {}})) {
     logzy::error("Couldn't send data to client {}. {}", clientName, *err);
     return false;
   }
 
-  auto iter = state.connectedClients.find(userId);
+  auto iter = state.connectedClients.find(userCertPem);
   if (iter == state.connectedClients.end()) {
     logzy::error("User not connected");
     return false;
@@ -316,22 +363,23 @@ auto handleServerAuthRequest(
     }
 
   } else {
-    logzy::error("Client with id {} disconnected", userId);
+    logzy::error("Client with id {} disconnected", userCertPem);
     return false;
   }
 
   logzy::trace("{} Server authenticated", clientName);
   logzy::trace("Server is waiting for client's authentication");
 
-  if (state.pendingAuthentications.contains(userId)) {
-    logzy::error("There is already a server waiting for id {}", userId);
+  if (state.pendingAuthentications.contains(userCertPem)) {
+    logzy::error("There is already a server waiting for id {}", userCertPem);
     return false;
   }
 
   {
     std::lock_guard lock{clientRegistryMutex};
-    logzy::trace("Inserted waiting for user {}", userId);
-    state.pendingAuthentications.insert({userId, std::weak_ptr{serverSocket}});
+    logzy::trace("Inserted waiting for user {}", userCertPem);
+    state.pendingAuthentications.insert(
+        {userCertPem, std::weak_ptr{serverSocket}});
   }
 
   return true;
@@ -588,6 +636,7 @@ void handleClientConnection(network::TcpSocket clientSocketRaw,
 
 auto main(int argc, const char *const *const argv) -> int {
 
+  TtpState state{};
   std::uint16_t bindPort = network::DEFAULT_TTP_PORT;
 
   if (parseCommandlineArgs(bindPort, argc, argv)) {
@@ -599,6 +648,16 @@ auto main(int argc, const char *const *const argv) -> int {
     ttpRsaKey = std::move(*keyResult);
   } else {
     logzy::critical("Couldn't generate TTP's RSA key pair");
+    return EXIT_FAILURE;
+  }
+
+  if (auto x509Result = crypto::X509Certificate::createSelfSignedCA(
+          "Trusted Third Party", ttpRsaKey)) {
+    state.ttpCertificate = std::move(*x509Result);
+  } else {
+    logzy::error("Couldn't create Self signed X509 certificate. {}",
+                 x509Result.error());
+    return EXIT_FAILURE;
   }
 
   network::TcpServer server;
@@ -607,7 +666,6 @@ auto main(int argc, const char *const *const argv) -> int {
     return EXIT_FAILURE;
   }
 
-  TtpState state{};
   std::vector<std::jthread> threadHandles;
   int clientCounter = 0;
   while (true) {

@@ -6,6 +6,7 @@
 #include "crypto/crypto.hpp"
 #include "crypto/hash.hpp"
 #include "crypto/rsa.hpp"
+#include "crypto/x509.hpp"
 #include "logzy/logzy.hpp"
 #include "network/packet.hpp"
 #include "network/socket.hpp"
@@ -20,6 +21,8 @@ struct AppContext {
   std::uint16_t bindPort{network::DEFAULT_SERVER_PORT};
   std::string ttpIp{network::DEFAULT_TTP_IP};
   std::uint16_t ttpPort{network::DEFAULT_TTP_PORT};
+  crypto::X509Certificate serverCertificate;
+  crypto::X509Certificate ttpCertificate;
 };
 
 enum class OptionKey {
@@ -100,36 +103,25 @@ void estabilishConnection(network::TcpSocket &clientSocket,
                           const nlohmann::json &requestPayload,
                           const crypto::Hash32 &serverID,
                           const crypto::RsaKeyPair &serverKey,
-                          const crypto::RsaKeyPair &ttpKey) {
+                          const crypto::RsaKeyPair &ttpKey,
+                          const crypto::X509Certificate &serverCertificate) {
   // Service request sent
 
   logzy::debug("estabilishConnection");
-  const auto userEncryptedId = requestPayload.value("id", "");
-  if (userEncryptedId.empty()) {
+  const auto userCertPem = requestPayload.value("user_cert_pem", "");
+  if (userCertPem.empty()) {
     logzy::error("Client' didnt supply id with ServiceRequest");
     return;
   }
 
-  logzy::trace("Encrypted user ID: {}", userEncryptedId);
-  logzy::trace("Encrypting server id");
+  logzy::trace("user certificate PEM:\n{}", userCertPem);
 
-  std::string encryptedServerID;
-  if (auto encryptedServerIDResult =
-          ttpKey.encryptPublic(crypto::hashToHex(serverID))) {
+  std::string serverCertPem;
 
-    logzy::trace("Encrypted server ID: {}", *encryptedServerIDResult);
-    logzy::trace("Base64 encoding encrypte dserver id");
-    if (auto basedServerID = crypto::base64Encode(*encryptedServerIDResult)) {
-      logzy::trace("Base64 Encoded '{}'", *basedServerID);
-      encryptedServerID = std::move(*basedServerID);
-    } else {
-      logzy::error("Couldn't Base64 server ID. {}", basedServerID.error());
-      return;
-    }
-
+  if (auto res = serverCertificate.toPem()) {
+    serverCertPem = std::move(*res);
   } else {
-    logzy::error("Coulndt' encrypt server id with ttp's public key. {}",
-                 encryptedServerIDResult.error());
+    logzy::error("Couldn't convert server's certifiacte to PEM");
     return;
   }
 
@@ -137,8 +129,8 @@ void estabilishConnection(network::TcpSocket &clientSocket,
           .type = network::PacketType::ServerAuthRequest,
           .payload =
               {
-                  {"user_id", userEncryptedId},
-                  {"server_id", encryptedServerID},
+                  {"user_certificate_pem", userCertPem},
+                  {"server_certificate_pem", serverCertPem},
               },
       })) {
     logzy::error("Couldn't send verification data to TTP server. {}", *err);
@@ -150,6 +142,8 @@ void estabilishConnection(network::TcpSocket &clientSocket,
                    ttpVerificationResult->type);
       return;
     }
+
+    logzy::trace("Passing ServerAuthOk to client.");
 
     // passing to user
     if (auto err = clientSocket.send(*ttpVerificationResult)) {
@@ -303,9 +297,11 @@ auto main(int argc, const char *const *const argv) -> int {
 
   crypto::RsaKeyPair ttpPublicKey;
 
-  if (auto ttpKeyResult = registerWithTtp(ttpSocket, ctx.id, publicKeyPem)) {
-    ttpPublicKey = std::move(*ttpKeyResult);
-  } else {
+  if (!registerWithTtp(
+          ttpSocket,
+          std::format("Server with id {}", crypto::hashToHex(ctx.id)), ctx.id,
+          publicKeyPem, ctx.serverCertificate, ctx.ttpCertificate,
+          ttpPublicKey)) {
     return EXIT_FAILURE;
   }
 
@@ -339,8 +335,8 @@ auto main(int argc, const char *const *const argv) -> int {
 
       if (received->type == network::PacketType::ServiceRequest) {
         estabilishConnection(*clientSocket, ttpSocket, sessionKey,
-                             received->payload, ctx.id, serverKey,
-                             ttpPublicKey);
+                             received->payload, ctx.id, serverKey, ttpPublicKey,
+                             ctx.serverCertificate);
       }
       if (received->type == network::PacketType::DataRequest) {
         handleDataRequest(*clientSocket, received->payload, sessionKey);

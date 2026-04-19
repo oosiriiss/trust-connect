@@ -4,6 +4,7 @@
 #include "crypto/crypto.hpp"
 #include "crypto/hash.hpp"
 #include "crypto/rsa.hpp"
+#include "crypto/x509.hpp"
 #include "network/packet.hpp"
 #include "network/socket.hpp"
 #include <cstdlib>
@@ -29,7 +30,6 @@ struct AppContext {
   std::string ttpIp{network::DEFAULT_TTP_IP};
   std::uint16_t serverPort{network::DEFAULT_SERVER_PORT};
   std::uint16_t ttpPort{network::DEFAULT_TTP_PORT};
-
   crypto::RsaKeyPair rsaKey{};
 };
 
@@ -148,6 +148,8 @@ struct AppState {
   crypto::Aes256 sessionKey{};
   std::vector<std::string> sentMessages;
   std::vector<std::string> serverResponses;
+  crypto::X509Certificate clientCertificate;
+  crypto::X509Certificate ttpCertificate;
 };
 
 void estabilishSession(network::TcpSocket &serverSocket,
@@ -409,9 +411,11 @@ auto main(int argc, char const *const *const argv) -> int {
     return EXIT_FAILURE;
   }
 
-  if (auto keyOpt = registerWithTtp(ttpSocket, state.id, publicKeyPem)) {
-    ttpPublicKey = std::move(*keyOpt);
-  } else {
+  if (!registerWithTtp(
+          ttpSocket,
+          std::format("Test clietn with id {}", crypto::hashToHex(state.id)),
+          state.id, publicKeyPem, state.clientCertificate, state.ttpCertificate,
+          ttpPublicKey)) {
     return EXIT_FAILURE;
   }
   logzy::info("Successfully registerd with TTP");

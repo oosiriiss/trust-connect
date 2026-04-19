@@ -62,6 +62,8 @@ add_library(
    src/crypto/aes.cpp
    src/crypto/base64.hpp
    src/crypto/base64.cpp
+   src/crypto/x509.hpp
+   src/crypto/x509.cpp
 
    src/common.hpp
    src/common.cpp
