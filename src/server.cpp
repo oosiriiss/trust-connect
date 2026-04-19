@@ -10,6 +10,7 @@
 #include "network/packet.hpp"
 #include "network/socket.hpp"
 #include <cstdlib>
+#include <ios>
 #include <unistd.h>
 
 namespace {
@@ -95,6 +96,7 @@ auto parseCommandlineArgs(AppContext &ctx, int argc,
 
 void estabilishConnection(network::TcpSocket &clientSocket,
                           network::TcpSocket &ttpSocket,
+                          crypto::Aes256 &sessionKey,
                           const nlohmann::json &requestPayload,
                           const crypto::Hash32 &serverID,
                           const crypto::RsaKeyPair &serverKey,
@@ -184,13 +186,12 @@ void estabilishConnection(network::TcpSocket &clientSocket,
     }
 
     // TODO :: Store them somewhere
-    crypto::Aes256 sessionKey{};
-
     if (auto keyString =
             crypto::decodeAndDecrypt(serverSessionKey, serverKey)) {
 
       if (auto aes = crypto::Aes256::fromKey(*keyString)) {
         sessionKey = std::move(*aes);
+        logzy::info("Sesssion estalbiflsbifs");
       } else {
         logzy::error("Couldnt create AES 256 GCM form key '{}'. {}", *keyString,
                      aes.error());
@@ -214,6 +215,49 @@ void estabilishConnection(network::TcpSocket &clientSocket,
     logzy::error("Couldn't receive TTP's user verification packet. {}",
                  clientAuthResult.error());
   }
+}
+
+void handleDataRequest(network::TcpSocket &clientSocket,
+                       nlohmann::json &payload, crypto::Aes256 &sessionKey) {
+
+  logzy::debug("Handling data request.");
+  const auto data = payload.value("data", std::string_view{""});
+
+  if (data.empty()) {
+    logzy::error("Client didn't send data.");
+    return;
+  }
+
+  logzy::debug("Decrypting user data.");
+  std::string message;
+  if (auto decResult = crypto::decodeAndDecrypt(data, sessionKey)) {
+    message = std::move(*decResult);
+  } else {
+    logzy::error("Couldn't decrypt client's message. {}", *decResult);
+    return;
+  }
+  logzy::debug("Decrypted");
+  logzy::trace("Decrypted data = {}", message);
+
+  message += " Hello, bonus from server";
+
+  logzy::debug("Encrypting the return message.");
+  logzy::trace("Return message = {}", message);
+  if (auto encResult = crypto::encryptAndEncode(message, sessionKey)) {
+    message = std::move(*encResult);
+  } else {
+    logzy::error("Couldn't encryprt message. {}", encResult.error());
+    return;
+  }
+
+  if (auto err = clientSocket.send(
+          network::Packet{.type = network::PacketType::DataResponse,
+                          .payload = {{"data", message}}})) {
+    logzy::error("Couldn't respond to the client. {}", *err);
+    return;
+  }
+
+  logzy::info("Data request handled.");
 }
 
 } // namespace
@@ -277,6 +321,8 @@ auto main(int argc, const char *const *const argv) -> int {
   auto clientSocket = server.accept();
   logzy::info("Client connected");
 
+  crypto::Aes256 sessionKey;
+
   while (true) {
     if (!clientSocket) {
       logzy::error("Accepting client failed: {}", clientSocket.error());
@@ -292,8 +338,12 @@ auto main(int argc, const char *const *const argv) -> int {
       }
 
       if (received->type == network::PacketType::ServiceRequest) {
-        estabilishConnection(*clientSocket, ttpSocket, received->payload,
-                             ctx.id, serverKey, ttpPublicKey);
+        estabilishConnection(*clientSocket, ttpSocket, sessionKey,
+                             received->payload, ctx.id, serverKey,
+                             ttpPublicKey);
+      }
+      if (received->type == network::PacketType::DataRequest) {
+        handleDataRequest(*clientSocket, received->payload, sessionKey);
       }
 
     } else {

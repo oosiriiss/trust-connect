@@ -12,6 +12,7 @@
 #include "ui/window.hpp"
 #include <GLFW/glfw3.h>
 #include <cstdlib>
+#include <ios>
 #include <logzy/formatters.hpp>
 #include <logzy/logzy.hpp>
 
@@ -23,6 +24,7 @@ enum class AppStage {
   GeneratingID,
   Registering,
   Registered,
+  Authenticated,
 
 };
 
@@ -31,20 +33,22 @@ struct AppState {
   crypto::Hash32 id{};
   std::string errorMessage;
   AppStage stage{AppStage::GeneratingID};
+  crypto::Aes256 sessionKey{};
+  std::vector<std::string> sentMessages;
+  std::vector<std::string> serverResponses;
 };
 
 void estabilishSession(network::TcpSocket &serverSocket,
-                       network::TcpSocket &ttpSocket,
+                       network::TcpSocket &ttpSocket, AppState &state,
                        const crypto::RsaKeyPair &clientKey,
-                       const crypto::RsaKeyPair &ttpPublicKey,
-                       const crypto::Hash32 &id) {
+                       const crypto::RsaKeyPair &ttpPublicKey) {
 
   logzy::debug("Requesting service from server");
   logzy::trace("Encrypting user id with ttp's public key");
-  logzy::trace("User id: {}", crypto::hashToHex(id));
+  logzy::trace("User id: {}", crypto::hashToHex(state.id));
   std::string userId;
   if (auto idResult =
-          crypto::encryptAndEncode(crypto::hashToHex(id), ttpPublicKey)) {
+          crypto::encryptAndEncode(crypto::hashToHex(state.id), ttpPublicKey)) {
     userId = std::move(*idResult);
   } else {
     logzy::error("Couldn't encrypt user's id. {}", idResult.error());
@@ -151,13 +155,12 @@ void estabilishSession(network::TcpSocket &serverSocket,
       return;
     }
 
-    crypto::Aes256 sessionKey{};
-
     if (auto keyString =
             crypto::decodeAndDecrypt(clientSessionKey, clientKey)) {
 
       if (auto aes = crypto::Aes256::fromKey(*keyString)) {
-        sessionKey = std::move(*aes);
+        state.sessionKey = std::move(*aes);
+        state.stage = AppStage::Authenticated;
       } else {
         logzy::error("Couldnt create AES 256 GCM form key '{}'. {}", *keyString,
                      aes.error());
@@ -168,27 +171,64 @@ void estabilishSession(network::TcpSocket &serverSocket,
                    keyString.error());
       return;
     }
-    logzy::info("Session key: {}", sessionKey.getRawKey());
 
-    std::string_view plaintext = "test";
-
-    if (auto encrypted = sessionKey.encrypt(plaintext)) {
-
-      if (auto decrypted = sessionKey.decrypt(*encrypted)) {
-
-        logzy::info("Encrypted and decrypted '{}' = '{}'", plaintext,
-                    *decrypted);
-
-      } else {
-        logzy::error("Decryption error: {}", decrypted.error());
-      }
-
-    } else {
-      logzy::error("Encryption error: {}", encrypted.error());
-    }
+    logzy::info("Session key: {}", state.sessionKey.getRawKey());
 
   } else {
     logzy::error("Receiving from clietn failed. {}", authResult.error());
+  }
+}
+
+void sendData(std::string_view data, network::TcpSocket &serverSocket,
+              AppState &state) {
+  logzy::debug("Encrytping data with session key.");
+
+  std::string encryptedData;
+  if (auto encrypted = crypto::encryptAndEncode(data, state.sessionKey)) {
+    encryptedData = std::move(*encrypted);
+  } else {
+    logzy::error("Couldn't encrypt data with session key. {}",
+                 encrypted.error());
+    return;
+  }
+
+  logzy::debug("Sending encrtypted data to server.");
+
+  if (auto err = serverSocket.send(
+          network::Packet{.type = network::PacketType::DataRequest,
+                          .payload = {{"data", encryptedData}}})) {
+    logzy::error("Couldn't send data. {}", *err);
+    return;
+  }
+
+  state.sentMessages.emplace_back(data);
+
+  logzy::debug("Waiting for response");
+
+  if (auto resp = serverSocket.receive()) {
+
+    if (resp->type != network::PacketType::DataResponse) {
+      logzy::error("Wrong resposne packet received '{}. Expected DataResponse",
+                   resp->type);
+      return;
+    }
+
+    const auto data = resp->payload.value("data", std::string_view{""});
+    if (data.empty()) {
+      logzy::error("Server returned no data.");
+      return;
+    }
+    if (auto decodedResult = crypto::decodeAndDecrypt(data, state.sessionKey)) {
+      logzy::info("Decoded data = {}. Size=  {}", *decodedResult,
+                  decodedResult->size());
+      std::ranges::replace(*decodedResult, '\0', ' ');
+      state.serverResponses.emplace_back(std::move(*decodedResult));
+    } else {
+      logzy::error("Couldn't decode data. {}", decodedResult.error());
+    }
+
+  } else {
+    logzy::error("Couldn't receive response from server. {}", resp.error());
   }
 }
 
@@ -288,10 +328,43 @@ auto main(int argc, char const *const *const argv) -> int {
       case AppStage::Registered: {
 
         if (ImGui::Button("Request service")) {
-          estabilishSession(serverSocket, ttpSocket, ctx.rsaKey, ttpPublicKey,
-                            state.id);
+          estabilishSession(serverSocket, ttpSocket, state, ctx.rsaKey,
+                            ttpPublicKey);
         }
 
+      } break;
+      case AppStage::Authenticated: {
+        static std::string inputFieldText(256, '\0');
+        ImGui::Text("Authenticated.");
+        ImGui::InputText("Data to send", inputFieldText.data(),
+                         inputFieldText.size());
+
+        if (ImGui::Button("Send")) {
+          sendData(
+              std::string_view{inputFieldText.data(), // To not send the whole
+                                                      // 256 byte string buffer.
+                               strlen(inputFieldText.c_str())},
+              serverSocket, state);
+        }
+
+        {
+          ImGui::BeginChild("Messages that server responded to", ImVec2(0, 300),
+                            true, ImGuiWindowFlags_HorizontalScrollbar);
+
+          size_t msgResponsePairs =
+              std::min(state.sentMessages.size(), state.serverResponses.size());
+          for (size_t i = 0; i < msgResponsePairs; ++i) {
+            ImGui::TextColored({0.0f, 0.0f, 1.0f, 1.0f}, "%s",
+                               state.sentMessages.at(i).c_str());
+
+            logzy::debug("Server message. {} size = {}",
+                         state.serverResponses.at(i),
+                         state.serverResponses.at(i).size());
+            ImGui::TextColored({0.0f, 1.0f, 0.0f, 1.0f}, "%s",
+                               state.serverResponses.at(i).c_str());
+          }
+          ImGui::EndChild();
+        }
       } break;
       }
     }

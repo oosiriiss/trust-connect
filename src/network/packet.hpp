@@ -17,6 +17,8 @@ enum class PacketType : std::int8_t {
   UserAuthDataSubmit,
   UserAuthOk,
   UserAuthRedirect,
+  DataRequest,
+  DataResponse,
   CloseConnection,
   __SizeGuard, // NOLINT
 };
@@ -55,6 +57,8 @@ template <> struct std::formatter<network::PacketType> {
         {Type::UserAuthDataSubmit, "UserAuthDataSubmit"},
         {Type::UserAuthOk, "UserAuthOk"},
         {Type::UserAuthRedirect, "UserAuthRedirect"},
+        {Type::DataRequest, "DataRequest"},
+        {Type::DataResponse, "DataResponse"},
         {Type::CloseConnection, "CloseConnection"},
         {Type::__SizeGuard, "__SizeGuard"},
     };
