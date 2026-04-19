@@ -21,4 +21,4 @@ function(Register_Test name)
 endfunction()
 
 
-Register_Test(test_test)
+Register_Test(test_headless_client)
