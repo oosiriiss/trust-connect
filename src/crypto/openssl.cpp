@@ -54,15 +54,14 @@ template auto generateRandomBytes<64>()
     -> std::expected<static_string<64>, std::string>;
 
 namespace internal {
+
 void RsaKeyDeleter::operator()(RsaKey *key) const noexcept {
   if (key == nullptr) {
     return;
   }
   EVP_PKEY_free(key);
 }
-}; // namespace internal
 
-namespace internal {
 void BioDeleter::operator()(Bio *bio) const noexcept {
   if (bio == nullptr) {
     return;
@@ -71,9 +70,6 @@ void BioDeleter::operator()(Bio *bio) const noexcept {
   BIO_free(bio);
 }
 
-} // namespace internal
-
-namespace internal {
 void KeyCtxDeleter::operator()(KeyCtx *ctx) const noexcept {
   if (ctx == nullptr) {
     return;
@@ -81,10 +77,7 @@ void KeyCtxDeleter::operator()(KeyCtx *ctx) const noexcept {
 
   ::EVP_PKEY_CTX_free(ctx);
 }
-} // namespace internal
 
-namespace internal {
-using MdCtx = struct ::evp_md_ctx_st;
 void MdCtxDeleter::operator()(MdCtx *ctx) const noexcept {
   if (ctx == nullptr) {
     return;
@@ -92,20 +85,13 @@ void MdCtxDeleter::operator()(MdCtx *ctx) const noexcept {
   EVP_MD_CTX_free(ctx);
 }
 
-} // namespace internal
-
-namespace internal {
-using CipherCtx = struct ::evp_cipher_ctx_st;
-void CipherCtxDeleter::operator()(CipherCtx *ctx) const noexcept {
-  if (ctx == nullptr) {
+void CipherCtxDeleter::operator()(CipherCtx *cipher) const noexcept {
+  if (cipher == nullptr) {
     return;
   }
 
-  EVP_CIPHER_CTX_free(ctx);
+  EVP_CIPHER_CTX_free(cipher);
 }
 
 } // namespace internal
-using CipherCtxPointer =
-    std::unique_ptr<internal::CipherCtx, internal::CipherCtxDeleter>;
-
 } // namespace crypto::openssl

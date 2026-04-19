@@ -24,50 +24,42 @@ template <std::size_t Bytes>
     -> std::expected<static_string<Bytes>, std::string>;
 
 namespace internal {
+
 using RsaKey = struct ::evp_pkey_st;
 struct RsaKeyDeleter {
   void operator()(RsaKey *key) const noexcept;
 };
-
-} // namespace internal
-using RsaKeyPointer =
-    std::unique_ptr<internal::RsaKey, internal::RsaKeyDeleter>;
-
-namespace internal {
 using Bio = struct ::bio_st;
 struct BioDeleter {
   void operator()(Bio *bio) const noexcept;
 };
 
-} // namespace internal
-using BioPointer = std::unique_ptr<internal::Bio, internal::BioDeleter>;
-
-namespace internal {
 using KeyCtx = struct ::evp_pkey_ctx_st;
 struct KeyCtxDeleter {
   void operator()(KeyCtx *ctx) const noexcept;
 };
 
-} // namespace internal
-using KeyCtxPointer =
-    std::unique_ptr<internal::KeyCtx, internal::KeyCtxDeleter>;
-
-namespace internal {
 using MdCtx = struct ::evp_md_ctx_st;
 struct MdCtxDeleter {
   void operator()(MdCtx *ctx) const noexcept;
 };
 
-} // namespace internal
-using MdCtxPointer = std::unique_ptr<internal::MdCtx, internal::MdCtxDeleter>;
-
-namespace internal {
 using CipherCtx = struct ::evp_cipher_ctx_st;
 struct CipherCtxDeleter {
-  void operator()(CipherCtx *ctx) const noexcept;
+  void operator()(CipherCtx *cipher) const noexcept;
 };
 
 } // namespace internal
+
+using RsaKeyPointer =
+    std::unique_ptr<internal::RsaKey, internal::RsaKeyDeleter>;
+
+using BioPointer = std::unique_ptr<internal::Bio, internal::BioDeleter>;
+
+using KeyCtxPointer =
+    std::unique_ptr<internal::KeyCtx, internal::KeyCtxDeleter>;
+
+using MdCtxPointer = std::unique_ptr<internal::MdCtx, internal::MdCtxDeleter>;
 
 using CipherCtxPointer =
     std::unique_ptr<internal::CipherCtx, internal::CipherCtxDeleter>;
