@@ -82,4 +82,59 @@ auto decodeAndDecrypt(std::string_view encrypted, const crypto::RsaKeyPair &key)
   return decrypted;
 }
 
+auto encryptAndEncode(std::string_view data, const crypto::Aes256 &key)
+    -> std::expected<std::string, std::string> {
+  logzy::debug("Encrypting and encoding");
+  logzy::trace("Data: {}", data);
+
+  std::expected<std::string, std::string> encrypted(std::string{});
+  logzy::trace("First encrypting");
+  if (auto encryptResult = key.encrypt(data)) {
+    *encrypted = std::move(*encryptResult);
+  } else {
+    return std::unexpected(
+        std::format("Couldnt' encrypt data. {}", encryptResult.error()));
+  }
+
+  logzy::trace("Encryption complete. Now encoding with Base64");
+  if (auto baseResult = crypto::base64Encode(*encrypted)) {
+    *encrypted = std::move(*baseResult);
+  } else {
+    return std::unexpected(
+        std::format("Couldnt' base64 Encode the data. {}", baseResult.error()));
+  }
+  logzy::debug("Encryption success");
+  logzy::trace("Encrypted data: {}", *encrypted);
+  return encrypted;
+}
+
+/**
+ * Decodes base64 encoded string and decrypts the content.
+ */
+auto decodeAndDecrypt(std::string_view encrypted, const crypto::Aes256 &key)
+    -> std::expected<std::string, std::string> {
+
+  logzy::debug("Decoding and decryprting");
+  logzy::trace("Encoded data: {}", encrypted);
+
+  std::expected<std::string, std::string> decrypted(std::string{});
+  logzy::trace("Decoding data");
+  if (auto baseResult = crypto::base64Decode(encrypted)) {
+    *decrypted = std::move(*baseResult);
+  } else {
+    return std::unexpected(
+        std::format("Couldnt' base64 Decode the data. {}", baseResult.error()));
+  }
+  logzy::trace("Data decoded. Now decrypting.");
+  if (auto decryptResult = key.decrypt(*decrypted)) {
+    *decrypted = std::move(*decryptResult);
+  } else {
+    return std::unexpected(
+        std::format("Couldnt' decrypt data. {}", decryptResult.error()));
+  }
+  logzy::debug("Decryption success");
+  logzy::trace("Decrypted data: {}", *decrypted);
+  return decrypted;
+}
+
 } // namespace crypto

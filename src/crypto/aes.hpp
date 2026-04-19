@@ -13,10 +13,10 @@ public:
   [[nodiscard]] static auto fromKey(std::string_view key)
       -> std::expected<Aes256, std::string>;
 
-  [[nodiscard]] auto encrypt(std::string_view data)
+  [[nodiscard]] auto encrypt(std::string_view data) const
       -> std::expected<std::string, std::string>;
 
-  [[nodiscard]] auto decrypt(std::string_view data)
+  [[nodiscard]] auto decrypt(std::string_view data) const
       -> std::expected<std::string, std::string>;
 
   [[nodiscard]] constexpr auto getRawKey() const noexcept

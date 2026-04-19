@@ -66,7 +66,7 @@ auto Aes256::fromKey(std::string_view key)
   return aes;
 }
 
-auto Aes256::encrypt(std::string_view data)
+auto Aes256::encrypt(std::string_view data) const
     -> std::expected<std::string, std::string> {
 
   logzy::debug("Encrypting with AES 256 GCM");
@@ -150,7 +150,7 @@ auto Aes256::encrypt(std::string_view data)
   return encrypted;
 }
 
-auto Aes256::decrypt(std::string_view data)
+auto Aes256::decrypt(std::string_view data) const
     -> std::expected<std::string, std::string> {
   logzy::debug("Decrypting AES 256 GCM");
   logzy::trace("Data size: {}", data.size());

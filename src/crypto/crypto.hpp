@@ -1,5 +1,6 @@
 #pragma once
 
+#include "crypto/aes.hpp"
 #include "crypto/rsa.hpp"
 #include "hash.hpp"
 #include <string>
@@ -22,6 +23,15 @@ auto encryptAndEncode(std::string_view data, const crypto::RsaKeyPair &key)
  * Decodes base64 encoded string and decrypts the content.
  */
 auto decodeAndDecrypt(std::string_view encrypted, const crypto::RsaKeyPair &key)
+    -> std::expected<std::string, std::string>;
+
+auto encryptAndEncode(std::string_view data, const crypto::Aes256 &key)
+    -> std::expected<std::string, std::string>;
+
+/**
+ * Decodes base64 encoded string and decrypts the content.
+ */
+auto decodeAndDecrypt(std::string_view encrypted, const crypto::Aes256 &key)
     -> std::expected<std::string, std::string>;
 
 } // namespace crypto
