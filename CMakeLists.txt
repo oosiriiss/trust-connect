@@ -22,14 +22,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(cppli)
 
-
-FetchContent_Declare(
-   logzy
-   GIT_REPOSITORY https://github.com/oosiriiss/logzy
-   GIT_TAG 075928d08bc97f05d10e1d4def802e2bf0792fc4
-)
-FetchContent_MakeAvailable(logzy)
-
 FetchContent_Declare(
    nlohmann_json
    GIT_REPOSITORY https://github.com/nlohmann/json
@@ -86,10 +78,10 @@ target_compile_features(shared-lib PUBLIC cxx_std_23)
 target_compile_features(ttp-app PUBLIC cxx_std_23)
 target_compile_features(server-app PUBLIC cxx_std_23)
 
-target_include_directories(shared-lib PUBLIC src vendor/debug_utils vendor/otl)
+target_include_directories(shared-lib PUBLIC src vendor/debug_utils vendor/otl vendor/logzy)
 
 
-if(MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL GNU) 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU") 
       # print, println
    target_link_libraries(shared-lib PUBLIC stdc++exp)
 endif()
@@ -104,7 +96,7 @@ endif()
 message(STATUS "OpenSSL include dir: ${OPENSSL_INCLUDE_DIR}")
 message(STATUS "OpenSSL libs: ${OPENSSL_LIBRARIES}")
 
-target_link_libraries(shared-lib PUBLIC OpenSSL::SSL OpenSSL::Crypto logzy::logzy cppli::cppli nlohmann_json::nlohmann_json)
+target_link_libraries(shared-lib PUBLIC OpenSSL::SSL OpenSSL::Crypto cppli::cppli nlohmann_json::nlohmann_json)
 target_link_libraries(ttp-app PRIVATE shared-lib )
 target_link_libraries(server-app PRIVATE shared-lib )
 
