@@ -110,7 +110,8 @@ void estabilishConnection(network::TcpSocket &clientSocket,
   logzy::debug("estabilishConnection");
   const auto userCertPem = requestPayload.value("user_cert_pem", "");
   if (userCertPem.empty()) {
-    logzy::error("Client' didnt supply id with ServiceRequest");
+    logzy::error("Client' didnt supply 'user_cert_pem' (user certificate) with "
+                 "ServiceRequest");
     return;
   }
 
@@ -148,10 +149,12 @@ void estabilishConnection(network::TcpSocket &clientSocket,
     // passing to user
     if (auto err = clientSocket.send(*ttpVerificationResult)) {
       logzy::error("Couldnt' pass ServerAuthOk to client", *err);
+      return;
     }
   } else {
     logzy::error("Couldn't receive TTP's verification packet. {}",
                  ttpVerificationResult.error());
+    return;
   }
 
   logzy::trace("Waiting for client's auth");

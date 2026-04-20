@@ -303,7 +303,7 @@ X509Certificate::verify(const X509Certificate &toVerify) const
   return result == 1;
 }
 
-[[nodiscard]] auto X509Certificate::getCommonName() const noexcept
+auto X509Certificate::getCommonName() const
     -> std::expected<std::string, std::string> {
 
   if (x509 == nullptr) {
@@ -330,9 +330,25 @@ X509Certificate::verify(const X509Certificate &toVerify) const
   return buffer;
 }
 
-[[nodiscard]] auto X509Certificate::getCommonNameSafe() const noexcept
-    -> std::string {
+auto X509Certificate::getCommonNameSafe() const -> std::string {
   return getCommonName().value_or("Unknown");
+}
+
+auto X509Certificate::getSerialNumberHex() const
+    -> std::expected<std::string, std::string> {
+
+  // TODO :: This method would get more compilcated if correct BINNUM's were
+  // used for certificate's serial numbers
+
+  const ASN1_INTEGER *serial = X509_get0_serialNumber(x509.get());
+
+  if (serial == nullptr) {
+    return std::unexpected(std::format("Couldn't get x509's seria number. {}",
+                                       openssl::getError()));
+  }
+
+  return std::expected<std::string, std::string>(
+      std::string(reinterpret_cast<char *>(serial->data), serial->length));
 }
 
 } // namespace crypto

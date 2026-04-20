@@ -48,20 +48,19 @@ void estabilishSession(network::TcpSocket &serverSocket,
 
   logzy::debug("Requesting service from server");
   logzy::trace("Encrypting user id with ttp's public key");
-  logzy::trace("User id: {}", crypto::hashToHex(state.id));
-  std::string userId;
-  if (auto idResult =
-          crypto::encryptAndEncode(crypto::hashToHex(state.id), ttpPublicKey)) {
-    userId = std::move(*idResult);
+
+  std::string userCertPem;
+  if (auto certResult = state.clientCertificate.toPem()) {
+    userCertPem = std::move(*certResult);
   } else {
-    logzy::error("Couldn't encrypt user's id. {}", idResult.error());
+    logzy::error("Couldn't encrypt user's id. {}", certResult.error());
     return;
   }
 
   if (auto err = serverSocket.send(
           network::Packet{.type = network::PacketType::ServiceRequest,
                           .payload = {
-                              {"id", userId},
+                              {"user_cert_pem", userCertPem},
                           }})) {
 
     logzy::error("ServiceRequest failed. {}", *err);
@@ -106,7 +105,7 @@ void estabilishSession(network::TcpSocket &serverSocket,
   if (auto err = ttpSocket.send(
           network::Packet{.type = network::PacketType::UserAuthDataSubmit,
                           .payload = {
-                              {"id", userId},
+                              {"user_cert_pem", userCertPem},
 
                           }})) {
     logzy::error("Couldn't send user auth data to TTP. {}", *err);
@@ -334,10 +333,6 @@ auto main(int argc, char const *const *const argv) -> int {
           for (size_t i = 0; i < msgResponsePairs; ++i) {
             ImGui::TextColored({0.0f, 0.0f, 1.0f, 1.0f}, "%s",
                                state.sentMessages.at(i).c_str());
-
-            logzy::debug("Server message. {} size = {}",
-                         state.serverResponses.at(i),
-                         state.serverResponses.at(i).size());
             ImGui::TextColored({0.0f, 1.0f, 0.0f, 1.0f}, "%s",
                                state.serverResponses.at(i).c_str());
           }

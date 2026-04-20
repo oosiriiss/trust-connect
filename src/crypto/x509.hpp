@@ -30,9 +30,12 @@ public:
   [[nodiscard]] auto getRawCertificate() const noexcept
       -> openssl::internal::X509 *;
 
-  [[nodiscard]] auto getCommonName() const noexcept
+  [[nodiscard]] auto getCommonName() const
       -> std::expected<std::string, std::string>;
-  [[nodiscard]] auto getCommonNameSafe() const noexcept -> std::string;
+  [[nodiscard]] auto getCommonNameSafe() const -> std::string;
+
+  [[nodiscard]] auto getSerialNumberHex() const
+      -> std::expected<std::string, std::string>;
 
 public:
   openssl::X509Pointer x509{nullptr};

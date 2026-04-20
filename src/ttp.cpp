@@ -184,7 +184,6 @@ auto handleRegister(TtpState &state,
   }
 
   std::string id;
-
   logzy::trace("Base64 encoded ID: {}", encryptedId);
 
   if (auto result = crypto::decodeAndDecrypt(encryptedId, ttpKey)) {
@@ -245,9 +244,17 @@ auto handleRegister(TtpState &state,
 
   logzy::trace("Saving client socket to map");
 
+  std::string userCertSerial;
+  if (auto serial = userCert.getSerialNumberHex()) {
+    userCertSerial = std::move(*serial);
+  } else {
+    logzy::error("Coulnd't  get user's certificate serila number");
+    return false;
+  }
   {
     std::lock_guard lock{clientRegistryMutex};
-    state.connectedClients.insert({id, std::weak_ptr{client}});
+
+    state.connectedClients.insert({userCertSerial, std::weak_ptr{client}});
   }
 
   logzy::debug("Replacing internal key clientName for it's id");
@@ -267,8 +274,9 @@ auto handleRegister(TtpState &state,
       logzy::error("Couldn't find node with key {}", clientName);
       return false;
     }
-    logzy::trace("Extracted. Switching keys from {} to {}", clientName, id);
-    node.key() = std::move(id);
+    logzy::trace("Extracted. Switching keys from {} to {}", clientName,
+                 userCertSerial);
+    node.key() = std::move(userCertSerial);
     logzy::trace("Inserting the node back");
 
     state.clientsPublicKeys.insert(std::move(node));
@@ -316,10 +324,33 @@ auto handleServerAuthRequest(
     logzy::error("couldnt' decrypt user certificate. {}", cert.error());
     return false;
   }
+
+  if (auto res = state.ttpCertificate.verify(userCert)) {
+    if (!res) {
+      logzy::error("Couldn't validate user's certificate!");
+      return false;
+    }
+    logzy::info("User's certificate verified");
+  } else {
+    logzy::error("Error occurred when validating user's certificate. {}",
+                 res.error());
+    return false;
+  }
+
+  if (auto res = state.ttpCertificate.verify(serverCert)) {
+    if (!res) {
+      logzy::error("Couldn't validate user's certificate!");
+      return false;
+    }
+    logzy::info("server's certificate verified");
+  } else {
+    logzy::error("Error occurred when validating user's certificate. {}",
+                 res.error());
+    return false;
+  }
+
   logzy::trace("Decrypted server CA:{}", serverCert.getCommonNameSafe());
-
   logzy::debug("Checking if users are verified");
-
   logzy::debug("Verifying user certificate");
   if (auto res = state.ttpCertificate.verify(userCert)) {
     if (!*res) {
@@ -350,7 +381,16 @@ auto handleServerAuthRequest(
     return false;
   }
 
-  auto iter = state.connectedClients.find(userCertPem);
+  std::string userCertSerial;
+  if (auto userCertSer = userCert.getSerialNumberHex()) {
+    userCertSerial = std::move(*userCertSer);
+  } else {
+    logzy::error("Couldn't get userCertSerial. {}", userCertSer.error());
+    return false;
+  }
+
+  auto iter = state.connectedClients.find(userCertSerial);
+
   if (iter == state.connectedClients.end()) {
     logzy::error("User not connected");
     return false;
@@ -378,23 +418,30 @@ auto handleServerAuthRequest(
   {
     std::lock_guard lock{clientRegistryMutex};
     logzy::trace("Inserted waiting for user {}", userCertPem);
-    state.pendingAuthentications.insert(
-        {userCertPem, std::weak_ptr{serverSocket}});
+
+    if (auto userCertSerial = userCert.getSerialNumberHex()) {
+      state.pendingAuthentications.insert(
+          {*userCertSerial, std::weak_ptr{serverSocket}});
+    } else {
+      logzy::error("Couldn't get user cert serial. {}", userCertSerial.error());
+      return false;
+    }
   }
 
   return true;
 }
 
-auto encryptClientSessionKey(const TtpState &state, std::string_view clientId,
+auto encryptClientSessionKey(const TtpState &state,
+                             std::string_view userCertSerial,
                              std::string_view sessionKey)
     -> std::expected<std::string, std::string> {
 
   const crypto::RsaKeyPair *clientPublicKey{nullptr};
   {
-    auto iter = state.clientsPublicKeys.find(clientId);
+    auto iter = state.clientsPublicKeys.find(userCertSerial);
     if (iter == state.clientsPublicKeys.end()) {
-      return std::unexpected(
-          std::format("Couldn't find user's id='{}' session key", clientId));
+      return std::unexpected(std::format(
+          "Couldn't find user's id='{}' session key", userCertSerial));
     }
     clientPublicKey = &iter->second;
   }
@@ -415,7 +462,7 @@ auto encryptClientSessionKey(const TtpState &state, std::string_view clientId,
   return encryptedClientKey;
 }
 
-auto findServerId(const TtpState &state, std::string_view clientId)
+auto findServerId(const TtpState &state, std::string_view clientSerial)
     -> std::expected<std::string_view, std::string> {
 
   std::lock_guard lock{clientRegistryMutex};
@@ -423,8 +470,8 @@ auto findServerId(const TtpState &state, std::string_view clientId)
   const network::TcpSocket *serverSocket{nullptr};
 
   // Finding socket that waits for curerent user to authenticate
-  for (const auto &[userId, sock] : state.pendingAuthentications) {
-    if (userId == clientId) {
+  for (const auto &[userSerial, sock] : state.pendingAuthentications) {
+    if (userSerial == clientSerial) {
       if (auto sockPtr = sock.lock()) {
         serverSocket = sockPtr.get();
       }
@@ -436,10 +483,10 @@ auto findServerId(const TtpState &state, std::string_view clientId)
                            "findServerId cannot finish properly.");
   }
 
-  for (const auto &[id, sock] : state.connectedClients) {
+  for (const auto &[serverCertSerial, sock] : state.connectedClients) {
     if (auto sockPtr = sock.lock()) {
       if (serverSocket == sockPtr.get()) {
-        return id;
+        return serverCertSerial;
       }
     }
   }
@@ -454,28 +501,45 @@ auto handleUserAuthDataSubmit(TtpState &state,
                               std::string_view clientName,
                               const crypto::RsaKeyPair &ttpKey) -> bool {
 
-  std::string id = packet.payload.value("id", "");
-  if (id.empty()) {
-    logzy::error("User {} didn't send id key", clientName);
+  std::string userCertPem = packet.payload.value("user_cert_pem", "");
+  if (userCertPem.empty()) {
+    logzy::error("User {} didn't user crt pem", clientName);
     return false;
   }
 
-  if (auto idResult = crypto::decodeAndDecrypt(id, ttpKey)) {
-    id = std::move(*idResult);
+  crypto::X509Certificate userCert;
+  if (auto res = crypto::X509Certificate::fromPem(userCertPem)) {
+    userCert = std::move(*res);
   } else {
-    logzy::error("Couldn't decrypt user's {} id {}. {}", clientName, id,
-                 idResult.error());
+    logzy::error("Couldn't decrypt user's {} id {}. {}", clientName,
+                 userCertPem, res.error());
     return false;
   }
 
-  if (!state.clientsPublicKeys.contains(id)) {
-    logzy::error("User with id: {} is not registered to the TTP", id);
+  if (auto res = state.ttpCertificate.verify(userCert)) {
+    if (!res) {
+      logzy::error("Couldn't validate user's certificate!");
+      return false;
+    }
+    logzy::info("user's certificate verified");
+  } else {
+    logzy::error("Error occurred when validating user's certificate. {}",
+                 res.error());
     return false;
   }
 
-  auto waitingServer = state.pendingAuthentications.find(id);
+  std::string userCertSerial;
+  if (auto res = userCert.getSerialNumberHex()) {
+    userCertSerial = std::move(*res);
+  } else {
+    logzy::error("Coulnd't get serial number. {}", res.error());
+    return false;
+  }
+
+  auto waitingServer = state.pendingAuthentications.find(userCertSerial);
   if (waitingServer == state.pendingAuthentications.end()) {
-    logzy::error("No server is waiting for user with id {} authentication", id);
+    logzy::error("No server is waiting for user with id {} authentication",
+                 userCertPem);
     return false;
   }
 
@@ -492,8 +556,8 @@ auto handleUserAuthDataSubmit(TtpState &state,
 
   std::string_view serverId;
 
-  if (auto serverIdResult = findServerId(state, id)) {
-    serverId = *serverIdResult;
+  if (auto serverCertSerial = findServerId(state, userCertSerial)) {
+    serverId = *serverCertSerial;
   }
 
   logzy::trace("Server id: {}", serverId);
@@ -501,7 +565,8 @@ auto handleUserAuthDataSubmit(TtpState &state,
   std::string encryptedServerSessionKey;
   std::string encryptedClientSessionKey;
 
-  if (auto encSessKey = encryptClientSessionKey(state, id, sessionKey)) {
+  if (auto encSessKey =
+          encryptClientSessionKey(state, userCertSerial, sessionKey)) {
     encryptedClientSessionKey = std::move(*encSessKey);
   } else {
     logzy::error("Couldn't encrypt clients's session key. {}",
@@ -535,16 +600,16 @@ auto handleUserAuthDataSubmit(TtpState &state,
     server->close();
     client->close();
 
-    logzy::trace("Removing clients public keys");
-    state.clientsPublicKeys.erase(state.clientsPublicKeys.find(serverId));
-    state.clientsPublicKeys.erase(state.clientsPublicKeys.find(id));
+    // logzy::trace("Removing clients public keys");
+    // state.clientsPublicKeys.erase(state.clientsPublicKeys.find(userCertSerial));
+    // state.clientsPublicKeys.erase(state.clientsPublicKeys.find(server));
 
-    logzy::trace("Removing connected clients");
-    state.connectedClients.erase(state.connectedClients.find(serverId));
-    state.connectedClients.erase(state.connectedClients.find(id));
+    // logzy::trace("Removing connected clients");
+    // state.connectedClients.erase(state.connectedClients.find(serverId));
+    // state.connectedClients.erase(state.connectedClients.find(userCertPem));
 
-    logzy::trace("Removing pedning authentications");
-    state.pendingAuthentications.erase(id);
+    // logzy::trace("Removing pedning authentications");
+    // state.pendingAuthentications.erase(userCertPem);
   } else {
     logzy::error(
         "Server that was waiting for authentication closed connection.");
