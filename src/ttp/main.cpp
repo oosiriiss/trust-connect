@@ -1,3 +1,4 @@
+#include "common/cli.hpp"
 #include "constants.hpp"
 #include "cppli/cppli.hpp"
 #include "cppli/vendor/debug_utils.hpp"
@@ -10,6 +11,8 @@
 #include "logzy/logzy.hpp"
 #include "network/packet.hpp"
 #include "network/socket.hpp"
+#include "ttp/cli.hpp"
+#include "utility.hpp"
 #include <chrono>
 #include <cstdlib>
 #include <expected>
@@ -26,84 +29,21 @@ namespace {
 
 std::mutex clientRegistryMutex;
 
-enum class OptionKey {
-  BindPort,
-  Help,
-};
-
-struct StringHash {
-  using is_transparent = void; // NOLINT
-  auto operator()(std::string_view str) const -> size_t {
-    return std::hash<std::string_view>{}(str);
-  }
-};
-
-struct StringCompare {
-  using is_transparent = void; // NOLINT
-  auto operator()(std::string_view left, std::string_view right) const -> bool {
-    return left == right;
-  }
-};
-
 struct TtpState {
 
   crypto::X509Certificate ttpCertificate;
   // TODO :: Client public keys could be deleted, and just sent with every
   // packet needed.
-  std::unordered_map<std::string, crypto::RsaKeyPair, StringHash, StringCompare>
+  std::unordered_map<std::string, crypto::RsaKeyPair, TransparentStringHash,
+                     TransparentStringCompare>
       clientsPublicKeys;
-  std::unordered_map<std::string, std::weak_ptr<network::TcpSocket>, StringHash,
-                     StringCompare>
+  std::unordered_map<std::string, std::weak_ptr<network::TcpSocket>,
+                     TransparentStringHash, TransparentStringCompare>
       pendingAuthentications;
-  std::unordered_map<std::string, std::weak_ptr<network::TcpSocket>, StringHash,
-                     StringCompare>
+  std::unordered_map<std::string, std::weak_ptr<network::TcpSocket>,
+                     TransparentStringHash, TransparentStringCompare>
       connectedClients;
 };
-
-auto getOptions() {
-  cppli::OptionContainer<OptionKey> options;
-
-  options.addOption(
-      OptionKey::BindPort,
-      cppli::Option{.firstName = "-p",
-                    .secondName = "--port",
-                    .description =
-                        "Specifies the port at which the server will listen on",
-                    .needsValue = true});
-  options.addOption(OptionKey::Help,
-                    cppli::Option{.firstName = "-h",
-                                  .secondName = "--help",
-                                  .description = "Displays the help message",
-                                  .needsValue = false});
-
-  return options;
-}
-
-auto parseCommandlineArgs(std::uint16_t &ctx, int argc,
-                          char const *const *const argv) -> bool {
-
-  cppli::OptionContainer<OptionKey> options = getOptions();
-  cppli::ParseResult<OptionKey> result;
-  try {
-    result = cppli::parseArguments(argc, argv, options);
-  } catch (const std::exception &exc) {
-    std::println("Couldn't parse arguments: {}", exc.what());
-    return true;
-  }
-
-  // Help terminates
-  if (result.options.contains(OptionKey::Help)) {
-    std::println("{}", cppli::createHelp(options, "ttp"));
-    return true;
-  }
-
-  if (auto port = result.options.find(OptionKey::BindPort);
-      port != result.options.end()) {
-    ctx = std::stoi(std::string(port->second.value.value()));
-  }
-
-  return false;
-}
 
 auto handleTradePublicKeys(TtpState &state,
                            std::shared_ptr<network::TcpSocket> &client,
@@ -701,12 +641,13 @@ void handleClientConnection(network::TcpSocket clientSocketRaw,
 
 auto main(int argc, const char *const *const argv) -> int {
 
-  TtpState state{};
-  std::uint16_t bindPort = network::DEFAULT_TTP_PORT;
-
-  if (parseCommandlineArgs(bindPort, argc, argv)) {
-    return EXIT_SUCCESS;
+  auto programArgs =
+      cli::parseCommandlineArgs<cli::ttp::TtpArguments>(argc, argv);
+  if (!programArgs) {
+    return programArgs.error();
   }
+
+  TtpState state{};
 
   crypto::RsaKeyPair ttpRsaKey;
   if (auto keyResult = crypto::RsaKeyPair::generate()) {
@@ -726,7 +667,7 @@ auto main(int argc, const char *const *const argv) -> int {
   }
 
   network::TcpServer server;
-  if (auto err = server.listen(bindPort)) {
+  if (auto err = server.listen(programArgs->bindPort)) {
     logzy::critical("TTP Server listen failed. Reason: {}", *err);
     return EXIT_FAILURE;
   }

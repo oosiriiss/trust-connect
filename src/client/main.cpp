@@ -1,6 +1,8 @@
 
 #include "client/application.hpp"
+#include "client/cli.hpp"
 #include "common.hpp"
+#include "common/cli.hpp"
 #include "crypto/aes.hpp"
 #include "crypto/base64.hpp"
 #include "crypto/crypto.hpp"
@@ -210,17 +212,17 @@ void sendData(std::string_view data, network::TcpSocket &serverSocket,
 } // namespace
 
 auto main(int argc, char const *const *const argv) -> int {
+
+  auto args =
+      cli::parseCommandlineArgs<cli::client::ClientArguments>(argc, argv);
+  if (!args) {
+    return args.error();
+  }
+
   AppContext ctx;
 
-  bool terminate = false;
-
-  if (auto ctxOpt = initialize(argc, argv, terminate)) {
+  if (auto ctxOpt = initialize()) {
     ctx = std::move(*ctxOpt);
-  } else {
-    if (terminate) {
-      return EXIT_SUCCESS;
-    }
-    return EXIT_FAILURE;
   }
 
   if (auto publicKey = ctx.rsaKey.publicKeyPem()) {
@@ -237,12 +239,13 @@ auto main(int argc, char const *const *const argv) -> int {
   }
 
   network::TcpSocket serverSocket;
-  if (!connectTo(serverSocket, ctx.serverIp, ctx.serverPort, "Server")) {
+  if (!connectTo(serverSocket, args->serverIp, args->serverPort, "Server")) {
     return EXIT_FAILURE;
   }
 
   network::TcpSocket ttpSocket;
-  if (!connectTo(ttpSocket, ctx.ttpIp, ctx.ttpPort, "Trusted third party")) {
+  if (!connectTo(ttpSocket, args->ttpIp, args->ttpPort,
+                 "Trusted third party")) {
     return EXIT_FAILURE;
   }
 

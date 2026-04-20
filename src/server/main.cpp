@@ -1,4 +1,5 @@
 #include "common.hpp"
+#include "common/cli.hpp"
 #include "constants.hpp"
 #include "cppli/cppli.hpp"
 #include "crypto/aes.hpp"
@@ -10,6 +11,7 @@
 #include "logzy/logzy.hpp"
 #include "network/packet.hpp"
 #include "network/socket.hpp"
+#include "server/cli.hpp"
 #include <cstdlib>
 #include <ios>
 #include <unistd.h>
@@ -18,84 +20,9 @@ namespace {
 
 struct AppContext {
   crypto::Hash32 id{};
-  std::uint16_t bindPort{network::DEFAULT_SERVER_PORT};
-  std::string ttpIp{network::DEFAULT_TTP_IP};
-  std::uint16_t ttpPort{network::DEFAULT_TTP_PORT};
   crypto::X509Certificate serverCertificate;
   crypto::X509Certificate ttpCertificate;
 };
-
-enum class OptionKey {
-  BindPort,
-  TtpIp,
-  TtpPort,
-  Help,
-};
-
-auto getOptions() {
-  cppli::OptionContainer<OptionKey> options;
-
-  options.addOption(
-      OptionKey::BindPort,
-      cppli::Option{.firstName = "-p",
-                    .secondName = "--port",
-                    .description =
-                        "Specifies the port at which the server will listen on",
-                    .needsValue = true});
-  options.addOption(
-      OptionKey::TtpIp,
-      cppli::Option{.firstName = "-S",
-                    .secondName = "--ttp-ip",
-                    .description = "Specifies ip at which the TTP is located",
-                    .needsValue = true});
-  options.addOption(
-      OptionKey::TtpPort,
-      cppli::Option{.firstName = "-P",
-                    .secondName = "--ttp-port",
-                    .description = "Specifies port at which the TTP is located",
-                    .needsValue = true});
-  options.addOption(OptionKey::Help,
-                    cppli::Option{.firstName = "-h",
-                                  .secondName = "--help",
-                                  .description = "Displays the help message",
-                                  .needsValue = false});
-
-  return options;
-}
-
-auto parseCommandlineArgs(AppContext &ctx, int argc,
-                          char const *const *const argv) -> bool {
-
-  cppli::OptionContainer<OptionKey> options = getOptions();
-  cppli::ParseResult<OptionKey> result;
-  try {
-    result = cppli::parseArguments(argc, argv, options);
-  } catch (const std::exception &exc) {
-    std::println("Couldn't parse arguments: {}", exc.what());
-    return true;
-  }
-
-  // Help terminates
-  if (result.options.contains(OptionKey::Help)) {
-    std::println("{}", cppli::createHelp(options, "ttp-server"));
-    return true;
-  }
-
-  if (auto port = result.options.find(OptionKey::BindPort);
-      port != result.options.end()) {
-    ctx.bindPort = std::stoi(std::string(port->second.value.value()));
-  }
-  if (auto ttpIp = result.options.find(OptionKey::TtpIp);
-      ttpIp != result.options.end()) {
-    ctx.ttpIp = ttpIp->second.value.value();
-  }
-  if (auto ttpPort = result.options.find(OptionKey::TtpPort);
-      ttpPort != result.options.end()) {
-    ctx.ttpPort = std::stoi(std::string(ttpPort->second.value.value()));
-  }
-
-  return false;
-}
 
 void estabilishConnection(network::TcpSocket &clientSocket,
                           network::TcpSocket &ttpSocket,
@@ -261,11 +188,12 @@ void handleDataRequest(network::TcpSocket &clientSocket,
 
 auto main(int argc, const char *const *const argv) -> int {
 
-  AppContext ctx{};
-
-  if (parseCommandlineArgs(ctx, argc, argv)) {
-    return EXIT_SUCCESS;
+  auto args =
+      cli::parseCommandlineArgs<cli::server::ServerArguments>(argc, argv);
+  if (!args) {
+    return args.error();
   }
+  AppContext ctx{};
 
   logzy::info("Generating server id");
   if (auto idExp = crypto::generateRandomId("Server")) {
@@ -278,7 +206,8 @@ auto main(int argc, const char *const *const argv) -> int {
   logzy::info("ID generated: {}", crypto::hashToHex(ctx.id));
 
   network::TcpSocket ttpSocket;
-  if (!connectTo(ttpSocket, ctx.ttpIp, ctx.ttpPort, "Trusted third party")) {
+  if (!connectTo(ttpSocket, args->ttpIp, args->ttpPort,
+                 "Trusted third party")) {
     return EXIT_FAILURE;
   }
 
@@ -308,9 +237,9 @@ auto main(int argc, const char *const *const argv) -> int {
     return EXIT_FAILURE;
   }
 
-  logzy::info("Binding to port {}", ctx.bindPort);
+  logzy::info("Binding to port {}", args->bindPort);
   network::TcpServer server;
-  if (auto err = server.listen(ctx.bindPort)) {
+  if (auto err = server.listen(args->bindPort)) {
     return EXIT_FAILURE;
   }
 

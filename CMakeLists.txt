@@ -63,13 +63,13 @@ add_library(
 
 add_executable(
    ttp-app
-   src/ttp.cpp
+   src/ttp/main.cpp
 )
 
 
 add_executable(
    server-app
-   src/server.cpp
+   src/server/main.cpp
 )
 
 
@@ -116,7 +116,7 @@ if(BUILD_CLIENT)
 
    add_executable(
       client-app
-      src/client.cpp
+      src/client/main.cpp
       ./src/ui/window.hpp
       src/client/application.hpp
       src/client/application.cpp
