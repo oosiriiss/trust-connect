@@ -159,20 +159,19 @@ void estabilishSession(network::TcpSocket &serverSocket,
 
   logzy::debug("Requesting service from server");
   logzy::trace("Encrypting user id with ttp's public key");
-  logzy::trace("User id: {}", crypto::hashToHex(state.id));
-  std::string userId;
-  if (auto idResult =
-          crypto::encryptAndEncode(crypto::hashToHex(state.id), ttpPublicKey)) {
-    userId = std::move(*idResult);
+
+  std::string userCertPem;
+  if (auto certResult = state.clientCertificate.toPem()) {
+    userCertPem = std::move(*certResult);
   } else {
-    logzy::error("Couldn't encrypt user's id. {}", idResult.error());
+    logzy::error("Couldn't encrypt user's id. {}", certResult.error());
     return;
   }
 
   if (auto err = serverSocket.send(
           network::Packet{.type = network::PacketType::ServiceRequest,
                           .payload = {
-                              {"id", userId},
+                              {"user_cert_pem", userCertPem},
                           }})) {
 
     logzy::error("ServiceRequest failed. {}", *err);
@@ -190,34 +189,7 @@ void estabilishSession(network::TcpSocket &serverSocket,
           packet->type);
       return;
     }
-
-    // Veriying
-    const auto message = packet->payload.value("message", std::string_view{""});
-    std::string signature = packet->payload.value("signature", "");
-
-    if (message.empty()) {
-      logzy::error("Server empty message during authentication");
-      return;
-    }
-
-    if (signature.empty()) {
-      logzy::error("Server empty signature during authentication");
-      return;
-    }
-
-    if (auto decodeResult = crypto::base64Decode(signature)) {
-      signature = std::move(*decodeResult);
-    } else {
-      logzy::error("Couldn't base64 decode the signature. {}",
-                   decodeResult.error());
-    }
-
-    if (auto result = ttpPublicKey.verify(message, signature); !result) {
-
-      logzy::error("Couldn't validate message and signature. {}",
-                   result.error());
-      return;
-    }
+    logzy::trace("Recevied ServerAuthOk");
 
   } else {
     logzy::error("Receiving failed. {}", packet.error());
@@ -244,7 +216,7 @@ void estabilishSession(network::TcpSocket &serverSocket,
   if (auto err = ttpSocket.send(
           network::Packet{.type = network::PacketType::UserAuthDataSubmit,
                           .payload = {
-                              {"id", userId},
+                              {"user_cert_pem", userCertPem},
 
                           }})) {
     logzy::error("Couldn't send user auth data to TTP. {}", *err);
