@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <concepts>
 #include <cstdint>
 #include <print>
@@ -102,8 +103,12 @@ inline void log(LogLevel level, const std::source_location sourceLoc,
   const auto f = std::string_view(sourceLoc.file_name());
   const auto filename = f.substr(f.find_last_of('/') + 1);
 
-  std::println("{} {}({}:{}) | {}", formattedLevel, filename, sourceLoc.line(),
-               sourceLoc.column(), message);
+  auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(
+      std::chrono::system_clock::now());
+  std::chrono::zoned_time localTime{std::chrono::current_zone(), now};
+
+  std::println("{} {:%Y-%m-%d %T} {}({}:{}) | {}", formattedLevel, localTime,
+               filename, sourceLoc.line(), sourceLoc.column(), message);
 }
 
 template <typename... Args>
