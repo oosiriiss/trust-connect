@@ -3,13 +3,13 @@
 #include <expected>
 #include <format>
 #include <nlohmann/json.hpp>
+#include <utility>
 
 namespace network {
 
 enum class PacketType : std::int8_t {
   CertificateRequest,
   CertificateResponse,
-  TradePublicKeysWithTtpResponse,
   RegisterRequest,
   RegisterResponse,
   ServiceRequest,
@@ -47,9 +47,8 @@ template <> struct std::formatter<network::PacketType> {
     using Type = network::PacketType;
     static std::unordered_map<Type, const char *> mappings{
 
-        {Type::CertificateRequest, "TradePublicKeysWithTtpRequest"},
-        {Type::TradePublicKeysWithTtpResponse,
-         "TradePublicKeysWithTtpResponse"},
+        {Type::CertificateRequest, "CertificateRequest"},
+        {Type::CertificateResponse, "CertificateResponse"},
         {Type::RegisterRequest, "RegisterRequest"},
         {Type::RegisterResponse, "RegisterResponse"},
         {Type::ServiceRequest, "ServiceRequest"},
@@ -64,7 +63,13 @@ template <> struct std::formatter<network::PacketType> {
         {Type::__SizeGuard, "__SizeGuard"},
     };
 
-    return std::format_to(ctx.out(), "{}", mappings.at(t));
+    std::string_view name = {"PacketType::NOFORMATTERMAPPING"};
+    auto iter = mappings.find(t);
+    if (iter != mappings.end()) {
+      name = iter->second;
+    }
+
+    return std::format_to(ctx.out(), "{}", name);
   }
 };
 

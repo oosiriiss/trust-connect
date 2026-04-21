@@ -31,22 +31,10 @@
   return true;
 }
 
-[[nodiscard]] static auto createRegisterPacket(const std::string &publicKeyPem)
-    -> network::Packet {
-  nlohmann::json payload;
-
-  // Hash to hex just for human readability.
-  payload["public_key_pem"] = publicKeyPem;
-  return network::Packet{.type = network::PacketType::CertificateRequest,
-                         .payload = std::move(payload)};
-}
-
 [[nodiscard]] auto
-registerWithTtp(network::TcpSocket &socket, std::string_view name,
-                const crypto::Hash32 &id, const crypto::RsaKeyPair &rsaKey,
-                crypto::X509Certificate &outClientCertificate,
-                crypto::X509Certificate &outCaCertificate,
-                crypto::RsaKeyPair &ttpPublicKey) -> bool {
+registerWithTtp(network::TcpSocket &socket, const crypto::Hash32 &id,
+                const crypto::RsaKeyPair &rsaKey, const TtpData &ttpData,
+                crypto::X509Certificate &outClientCertificate) -> bool {
 
   std::string publicKeyPem;
   if (auto res = rsaKey.publicKeyPem()) {
@@ -56,25 +44,19 @@ registerWithTtp(network::TcpSocket &socket, std::string_view name,
     return false;
   }
 
-  nlohmann::json payload = {
-      {"common_name", name},
-      {"public_key_pem", std::move(publicKeyPem)},
-  };
-
-  logzy::debug("Siginig the request payload.");
-  std::string signature;
-  if (auto res = rsaKey.sign(payload.dump())) {
-
-      if(auto encode = 
-    signature = std::move(*res);
+  std::string encryptedId;
+  if (auto res =
+          crypto::encryptAndEncode(crypto::hashToHex(id), ttpData.publicKey)) {
+    encryptedId = std::move(*res);
   } else {
-    logzy::error("Couldn't sign the payload. {}", res.error());
+    logzy::error("Couldn't encrypte id. {}", res.error());
     return false;
   }
 
-   
-
-  payload["signature"] = std::move(signature);
+  nlohmann::json payload = {
+      {"id", encryptedId},
+      {"public_key_pem", std::move(publicKeyPem)},
+  };
 
   logzy::info("Registering with TTP");
   logzy::trace("Requesting TTP's certificate.");
@@ -92,114 +74,36 @@ registerWithTtp(network::TcpSocket &socket, std::string_view name,
     return false;
   }
 
-  if (received->type != network::PacketType::TradePublicKeysWithTtpResponse) {
+  if (received->type != network::PacketType::CertificateResponse) {
     logzy::error("TTP Sent wrong packet when registering. {}", *received);
     return false;
   }
 
-  std::string cert = received->payload.value("certificate_pem", "");
-  std::string caCert = received->payload.value("ttp_ca_certificate_pem", "");
-  signature = received->payload.value("signature", "");
-  received->payload.erase("signature");
-
-  if (cert.empty() || caCert.empty() || signature.empty()) {
-    logzy::error("insufficient data");
+  auto receivedCertPem =
+      received->payload.value("certificate_pem", std::string_view{""});
+  if (receivedCertPem.empty()) {
+    logzy::error("No certificate in resposen.");
+    return false;
   }
 
-  crypto::X509Certificate ttpCert;
-  if (auto res = crypto::X509Certificate::fromPem(caCert)) {
-    ttpCert = std::move(*res);
+  crypto::X509Certificate receivedCert;
+  if (auto res = crypto::X509Certificate::fromPem(receivedCertPem)) {
+    receivedCert = std::move(*res);
   } else {
-    logzy::error("couldn't load ca cert");
-    return false;
+    logzy::error("Invalid certificate PEM. {}", res.error());
+      return false;
   }
 
-  crypto::X509Certificate ownCert;
-
-  if (auto res = crypto::X509Certificate::fromPem(cert)) {
-    ownCert = std::move(*res);
+  if (auto res = ttpData.certificate.verify(receivedCert)) {
+    if (!*res) {
+      logzy::critical("Certificate veirifaction failed");
+      return false;
+    }
   } else {
-    logzy::error("couldn't load own cert");
+    logzy::error("Error when veirfyin gcertificate. {}", res.error());
     return false;
   }
 
-  std::string_view ttpPublicKeyPemString =
-      received->payload.value("public_key_pem", std::string_view{""});
-
-  if (ttpPublicKeyPemString.empty()) {
-    logzy::error(
-        "TTP's response payload doesn't include 'public_key_pem' json key");
-    return false;
-  }
-
-  auto keyResult = crypto::RsaKeyPair::fromPublicPem(ttpPublicKeyPemString);
-  if (!keyResult) {
-    logzy::error("Couldn't create RSA key pair from TTP's public key PEM. {}",
-                 keyResult.error());
-    return false;
-  }
-
-  ttpPublicKey = std::move(*keyResult);
-
-  std::string encryptedId;
-
-  if (auto encryptResult =
-          crypto::encryptAndEncode(crypto::hashToHex(id), ttpPublicKey)) {
-    encryptedId = std::move(*encryptResult);
-  } else {
-    logzy::error("Error occurred. {}", encryptResult.error());
-    return false;
-  }
-
-  logzy::trace("Obatining certificates");
-
-  if (auto err = socket.send(network::Packet{
-          .type = network::PacketType::RegisterRequest,
-          .payload = {{"name", name}, {"id", encryptedId}},
-      })) {
-    logzy::error("Couldn't send {} to TTP. {}",
-                 network::PacketType::RegisterRequest, *err);
-    return false;
-  }
-
-  if (auto certPacket = socket.receive()) {
-    if (certPacket->type != network::PacketType::RegisterResponse) {
-      logzy::error("TTP sent wrong packet as register response. {}",
-                   certPacket->type);
-      return false;
-    }
-    std::string_view ttpCaCertificate = certPacket->payload.value(
-        "ttp_ca_certificate_pem", std::string_view{""});
-    std::string_view currentCertificate =
-        certPacket->payload.value("certificate_pem", std::string_view{""});
-
-    if (ttpCaCertificate.empty()) {
-      logzy::error("TTP sent empty CA certificate.");
-      return false;
-    }
-
-    if (currentCertificate.empty()) {
-      logzy::error("TTP sent empty client's certificate.");
-      return false;
-    }
-
-    if (auto certRes = crypto::X509Certificate::fromPem(ttpCaCertificate)) {
-      logzy::trace("Received CA certificate.");
-      outCaCertificate = std::move(*certRes);
-    } else {
-      logzy::error("CA Certificate was malformed. {}", certRes.error());
-      return false;
-    }
-
-    if (auto certRes = crypto::X509Certificate::fromPem(currentCertificate)) {
-      logzy::trace("Received Client certificate.");
-      outClientCertificate = std::move(*certRes);
-    } else {
-      logzy::error("Client Certificate was malformed. {}", certRes.error());
-      return false;
-    }
-
-    return true;
-  }
-  return false;
+  outClientCertificate = std::move(receivedCert);
+  return true;
 }

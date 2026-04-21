@@ -39,9 +39,9 @@ struct AppState {
   AppStage stage{AppStage::GeneratingID};
   crypto::Aes256 sessionKey{};
   crypto::X509Certificate clientCertificate;
-  crypto::X509Certificate ttpCertificate;
   std::vector<std::string> sentMessages;
   std::vector<std::string> serverResponses;
+  TtpData ttpData;
 };
 
 void estabilishSession(network::TcpSocket &serverSocket,
@@ -255,11 +255,21 @@ auto main(int argc, char const *const *const argv) -> int {
   AppState state{};
 
   if (auto cert = crypto::X509Certificate::fromFile(crypto::TTP_CERT_PATH)) {
-    state.ttpCertificate = std::move(*cert);
+    state.ttpData.certificate = std::move(*cert);
+    logzy::info("Loaded certificate with CN={}",
+                state.ttpData.certificate.getCommonNameSafe());
   } else {
     logzy::critical("Couldn't load ttp certifiacte. {}", cert.error());
     return EXIT_FAILURE;
   }
+
+  if (auto key = state.ttpData.certificate.getPublicKey()) {
+    state.ttpData.publicKey = std::move(*key);
+  } else {
+    logzy::critical("Couldn't load ttp' public key  {}", key.error());
+    return EXIT_FAILURE;
+  }
+
   logzy::info("Loaded ttp key");
 
   while (glfwWindowShouldClose(ctx.window) == 0) {
@@ -293,9 +303,8 @@ auto main(int argc, char const *const *const argv) -> int {
         }
         logzy::trace("Beggining registering with TTP");
 
-        if (!registerWithTtp(ttpSocket, crypto::hashToHex(state.id), state.id,
-                             ctx.rsaKey, state.clientCertificate,
-                             state.ttpCertificate, ttpPublicKey)) {
+        if (!registerWithTtp(ttpSocket, state.id, ctx.rsaKey, state.ttpData,
+                             state.clientCertificate)) {
           break;
         }
         logzy::info("Successfully registerd with TTP");

@@ -2,7 +2,9 @@
 
 #include "crypto/aes.hpp"
 #include "crypto/rsa.hpp"
+#include "crypto/x509.hpp"
 #include "hash.hpp"
+#include "nlohmann/json_fwd.hpp"
 #include <string>
 
 namespace crypto {
@@ -33,5 +35,11 @@ auto encryptAndEncode(std::string_view data, const crypto::Aes256 &key)
  */
 auto decodeAndDecrypt(std::string_view encrypted, const crypto::Aes256 &key)
     -> std::expected<std::string, std::string>;
+
+auto signPayload(const RsaKeyPair &privateKey, nlohmann::json &payload)
+    -> std::optional<std::string>;
+
+auto verifyPayload(const X509Certificate &certificateWithPublicKey,
+                   nlohmann::json &payload) -> std::expected<bool, std::string>;
 
 } // namespace crypto

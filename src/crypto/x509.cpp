@@ -406,7 +406,7 @@ auto X509Certificate::getSerialNumberHex() const
 
 [[nodiscard]] auto X509Certificate::getPublicKey() const noexcept
     -> std::expected<crypto::RsaKeyPair, std::string> {
-  if (x509) {
+  if (x509 == nullptr) {
     return std::unexpected("Trying to use uninitialized certificate.");
   }
   auto key = openssl::RsaKeyPointer{X509_get_pubkey(x509.get())};

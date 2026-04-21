@@ -1,12 +1,17 @@
 #include "crypto/crypto.hpp"
 
 #include "crypto/base64.hpp"
+#include "crypto/rsa.hpp"
 #include "logzy/logzy.hpp"
+#include "nlohmann/json.hpp"
+#include "nlohmann/json_fwd.hpp"
 #include "openssl.hpp"
 #include <expected>
+#include <locale>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
+#include <optional>
 
 namespace crypto {
 
@@ -135,6 +140,75 @@ auto decodeAndDecrypt(std::string_view encrypted, const crypto::Aes256 &key)
   logzy::debug("Decryption success");
   logzy::trace("Decrypted data: {}", *decrypted);
   return decrypted;
+}
+
+auto signPayload(const RsaKeyPair &privateKey, nlohmann::json &payload)
+    -> std::optional<std::string> {
+  if (payload.contains("signature")) {
+    return std::optional{
+        std::string{"There is already a signature in the payload."}};
+  }
+
+  auto signature = privateKey.sign(payload.dump());
+  if (!signature) {
+    return std::optional{
+        std::format("Couldn't generate a signature. {}", signature.error())};
+  }
+
+  if (auto encoded = base64Encode(*signature)) {
+    signature = std::move(*encoded);
+  } else {
+    return std::optional{std::format("Couldn't base64 encode the signature. {}",
+                                     encoded.error())};
+  }
+
+  payload["signature"] = std::move(*signature);
+  return std::nullopt;
+}
+
+auto verifyPayload(const X509Certificate &certificateWithPublicKey,
+                   nlohmann::json &payload)
+    -> std::expected<bool, std::string> {
+  logzy::debug("Verifying payload's signature");
+  std::string signature = payload.value("signature", "");
+  logzy::trace("Signature found. '{}'", signature);
+
+  if (signature.empty()) {
+    return std::unexpected(std::string{"No signature found in the payload."});
+  }
+
+  logzy::trace("Base64Decoding signature");
+
+  if (auto decoded = base64Decode(signature)) {
+    signature = std::move(*decoded);
+  } else {
+    return std::unexpected(
+        std::format("couldn't base64 decode signature.", decoded.error()));
+  }
+  logzy::trace("Decoded signature. {}", signature);
+
+  logzy::trace("removing signature field from the payload");
+  if (payload.erase("signature") < 1) {
+    return std::unexpected(
+        std::string{"Couldn't pop signature key from payload"});
+  }
+
+  logzy::trace("Extracting the public key from CN={} certificate",
+               certificateWithPublicKey.getCommonNameSafe());
+
+  auto pubKey = certificateWithPublicKey.getPublicKey();
+  if (!pubKey) {
+    return std::unexpected{std::format(
+        "Couldn't obtain public key from the certificate. {}", pubKey.error())};
+  }
+
+  auto res = pubKey->verify(payload.dump(), signature);
+  if (!res) {
+    return std::unexpected{std::format(
+        "ERror occurred while  verifying signature. {}", res.error())};
+  }
+  logzy::debug("Verification success");
+  return std::expected<bool, std::string>{*res};
 }
 
 } // namespace crypto

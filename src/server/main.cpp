@@ -21,7 +21,7 @@ namespace {
 struct AppContext {
   crypto::Hash32 id{};
   crypto::X509Certificate serverCertificate;
-  crypto::X509Certificate ttpCertificate;
+  TtpData ttpData;
 };
 
 void estabilishConnection(network::TcpSocket &clientSocket,
@@ -220,17 +220,25 @@ auto main(int argc, const char *const *const argv) -> int {
   }
 
   if (auto cert = crypto::X509Certificate::fromFile(crypto::TTP_CERT_PATH)) {
-    ctx.ttpCertificate = std::move(*cert);
+    ctx.ttpData.certificate = std::move(*cert);
+    logzy::info("Loaded certificate with CN={}",
+                ctx.ttpData.certificate.getCommonNameSafe());
   } else {
     logzy::critical("Couldn't load ttp certifiacte. {}", cert.error());
     return EXIT_FAILURE;
   }
 
+  if (auto key = ctx.ttpData.certificate.getPublicKey()) {
+    ctx.ttpData.publicKey = std::move(*key);
+  } else {
+    logzy::critical("Couldn't load ttp' public key  {}", key.error());
+    return EXIT_FAILURE;
+  }
+
   crypto::RsaKeyPair ttpPublicKey;
 
-  if (!registerWithTtp(ttpSocket, crypto::hashToHex(ctx.id), ctx.id, serverKey,
-                       ctx.serverCertificate, ctx.ttpCertificate,
-                       ttpPublicKey)) {
+  if (!registerWithTtp(ttpSocket, ctx.id, serverKey, ctx.ttpData,
+                       ctx.serverCertificate)) {
     return EXIT_FAILURE;
   }
 

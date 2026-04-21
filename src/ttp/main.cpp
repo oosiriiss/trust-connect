@@ -44,55 +44,38 @@ struct TtpState {
 
 auto handleRequestCaCertificate(TtpState &state,
                                 std::shared_ptr<network::TcpSocket> &client,
-                                std::string_view clientName,
                                 const crypto::RsaKeyPair &ttpKey,
                                 nlohmann::json &payload) -> bool {
 
-  logzy::trace("Received TradePublicKeysWithTtp packet from {}", clientName);
+  logzy::trace("Received TradePublicKeysWithTtp packet from");
 
-  // Verifying the sent data
-  if (payload.value("common_name", "").empty()) {
-    logzy::error("no common name");
-    return false;
-  }
-  if (payload.value("public_key_pem", "").empty()) {
-    logzy::error("no pubkey name");
-    return false;
-  }
-  if (payload.value("signature", "").empty()) {
-    logzy::error("no signature name");
-    return false;
-  }
-
-  auto commonName = payload.value("common_name", std::string_view{""});
   auto publicKeyPem = payload.value("public_key_pem", std::string_view{""});
-  std::string signature = payload.value("signature", "");
+  std::string clientID = payload.value("id", "");
 
-  // removing signature to verify integrity
-  payload.erase("signature");
-  crypto::RsaKeyPair clientKeyPair;
+  if (clientID.empty()) {
+    logzy::error("id is empty");
+    return false;
+  }
+
+  if (auto res = crypto::decodeAndDecrypt(clientID, ttpKey)) {
+    clientID = std::move(*res);
+  } else {
+    logzy::error("Couldn't decrypt user's id. {}", res.error());
+    return false;
+  }
+
+  crypto::RsaKeyPair clientPublicKey;
 
   if (auto res = crypto::RsaKeyPair::fromPublicPem(publicKeyPem)) {
-    clientKeyPair = std::move(*res);
+    clientPublicKey = std::move(*res);
   } else {
     logzy::error("Couldn't parse client's public key pem. {}", res.error());
     return false;
   }
 
-  logzy::trace("Veirfying signature");
-  if (auto res = clientKeyPair.verify(payload.dump(), signature)) {
-    if (!res) {
-      logzy::error("Verification failed. invalid siganture. {}", signature);
-      return false;
-    }
-  } else {
-    logzy::error("Couldnt' verify signautre. error. {}", res.error());
-    return false;
-  }
-
   crypto::X509Certificate userCert;
   if (auto certRes =
-          state.ttpCertificate.issue(clientKeyPair, clientName, ttpKey)) {
+          state.ttpCertificate.issue(clientPublicKey, clientID, ttpKey)) {
     userCert = std::move(*certRes);
   } else {
     logzy::error("Couldn't create user's certificate.{}", certRes.error());
@@ -103,7 +86,6 @@ auto handleRequestCaCertificate(TtpState &state,
   logzy::trace("Sending client it's certificate");
 
   std::string userCertPem;
-  std::string ttpCertPem;
 
   if (auto res = userCert.toPem()) {
     userCertPem = std::move(*res);
@@ -112,31 +94,29 @@ auto handleRequestCaCertificate(TtpState &state,
     return false;
   }
 
-  if (auto res = state.ttpCertificate.toPem()) {
-    ttpCertPem = std::move(*res);
-  } else {
-    logzy::error("Couldn't convert ttp certificate to PEM");
-    return false;
-  }
-
   nlohmann::json responsePayload = {
       {"certificate_pem", std::move(userCertPem)},
-      {"ttp_ca_certificate_pem", std::move(ttpCertPem)}};
-
-  if (auto signature = ttpKey.sign(responsePayload.dump())) {
-    logzy::trace("Signed. {}", *signature);
-    responsePayload["signature"] = std::move(*signature);
-  } else {
-    logzy::error("Couldn't sign the payload. {}", signature.error());
-    return false;
-  }
+  };
 
   if (auto err = client->send(
-          network::Packet{.type = network::PacketType::RegisterResponse,
-                          .payload = std::move(payload)})) {
+          network::Packet{.type = network::PacketType::CertificateResponse,
+                          .payload = std::move(responsePayload)})) {
     logzy::error("error while sending. {}", *err);
     return false;
   }
+
+  //{
+  //  auto userCertCn = userCert.getCommonName();
+  //  if (!userCertCn) {
+  //    logzy::error("Couldn't get common name from user's certificate. {}",
+  //                 userCertCn.error());
+  //    return false;
+  //  }
+  //  std::lock_guard lock{clientRegistryMutex};
+  //  state.connectedClients.insert({*userCertCn, std::weak_ptr{client}});
+  //}
+
+  logzy::info("sent certificate.");
 
   return true;
 }
@@ -229,7 +209,6 @@ auto handleRegister(TtpState &state,
   }
   {
     std::lock_guard lock{clientRegistryMutex};
-
     state.connectedClients.insert({userCertSerial, std::weak_ptr{client}});
   }
 
@@ -601,8 +580,7 @@ auto handlePacket(TtpState &state, network::Packet &packet,
 
   switch (packet.type) {
   case network::PacketType::CertificateRequest:
-    return handleRequestCaCertificate(state, client, clientName, ttpKey,
-                                      packet.payload);
+    return handleRequestCaCertificate(state, client, ttpKey, packet.payload);
   case network::PacketType::RegisterRequest:
     return handleRegister(state, client, clientName, ttpKey, packet.payload);
   case network::PacketType::ServerAuthRequest:
@@ -625,15 +603,11 @@ auto handlePacket(TtpState &state, network::Packet &packet,
     [[fallthrough]];
   case network::PacketType::__SizeGuard:
     [[fallthrough]];
-  case network::PacketType::RegisterResponse:
+  case network::PacketType::CertificateResponse:
     [[fallthrough]];
-  case network::PacketType::TradePublicKeysWithTtpResponse:
+  case network::PacketType::RegisterResponse:
     logzy::error("Invalid packet received: {}", packet.type);
     return false;
-    break;
-    break;
-  case network::PacketType::CertificateResponse:
-    break;
   }
   return true;
 }
