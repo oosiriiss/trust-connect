@@ -12,6 +12,7 @@ struct evp_pkey_ctx_st;
 struct evp_md_ctx_st;
 struct evp_cipher_ctx_st;
 struct x509_st;
+struct bignum_st;
 }
 
 namespace crypto::openssl {
@@ -54,6 +55,14 @@ using X509 = struct ::x509_st;
 struct X509Deleter {
   void operator()(openssl::internal::X509 *cert) const noexcept;
 };
+using BigNum = struct ::bignum_st;
+struct BigNumDeleter {
+  void operator()(BigNum *num) const noexcept;
+};
+
+struct OpenSSLFree {
+  void operator()(char *str) const noexcept;
+};
 
 } // namespace internal
 
@@ -71,5 +80,10 @@ using CipherCtxPointer =
     std::unique_ptr<internal::CipherCtx, internal::CipherCtxDeleter>;
 
 using X509Pointer = std::unique_ptr<internal::X509, internal::X509Deleter>;
+
+using BigNumPointer =
+    std::unique_ptr<internal::BigNum, internal::BigNumDeleter>;
+
+using String = std::unique_ptr<char, internal::OpenSSLFree>;
 
 } // namespace crypto::openssl

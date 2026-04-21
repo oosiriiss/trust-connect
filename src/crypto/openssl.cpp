@@ -1,5 +1,6 @@
 #include "openssl.hpp"
 #include <openssl/bio.h>
+#include <openssl/bn.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -102,6 +103,17 @@ void X509Deleter::operator()(openssl::internal::X509 *cert) const noexcept {
 
   X509_free(cert);
 }
+
+void BigNumDeleter::operator()(BigNum *num) const noexcept {
+
+  if (num == nullptr) {
+    return;
+  }
+
+  BN_free(num);
+}
+
+void OpenSSLFree::operator()(char *str) const noexcept { OPENSSL_free(str); }
 
 } // namespace internal
 } // namespace crypto::openssl

@@ -2,11 +2,15 @@
 
 #include "openssl.hpp"
 #include "rsa.hpp"
+#include "static_string.hpp"
 #include <expected>
 
 namespace crypto {
 struct X509Certificate {
 public:
+  static constexpr auto SerialNumberBytes = 16;
+  using SerialNumber = static_string<SerialNumberBytes>;
+
   [[nodiscard]] static auto createSelfSignedCA(std::string_view name,
                                                const RsaKeyPair &caKey) noexcept
       -> std::expected<X509Certificate, std::string>;
@@ -27,23 +31,20 @@ public:
   [[nodiscard]] auto verify(const X509Certificate &toVerify) const
       -> std::expected<bool, std::string>;
 
-  [[nodiscard]] auto getRawCertificate() const noexcept
-      -> openssl::internal::X509 *;
+  [[nodiscard]] auto getPublicKey() const noexcept
+      -> std::expected<crypto::RsaKeyPair, std::string>;
 
   [[nodiscard]] auto getCommonName() const
       -> std::expected<std::string, std::string>;
   [[nodiscard]] auto getCommonNameSafe() const -> std::string;
 
   [[nodiscard]] auto getSerialNumberHex() const
-      -> std::expected<std::string, std::string>;
+      -> std::expected<SerialNumber, std::string>;
+
+  [[nodiscard]] auto getRawCertificate() const noexcept
+      -> openssl::internal::X509 *;
 
 public:
   openssl::X509Pointer x509{nullptr};
-
-private:
-  // One CA cannot (or shouldn't) issue multiple certs with the same serial
-  // number. Generating a random BIGNUM wiht openssl's BN would be better, but
-  // its ok for now
-  inline static int X509SerialNumbercounter = 1; // NOLINT
 };
 } // namespace crypto

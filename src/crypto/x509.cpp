@@ -7,12 +7,52 @@
 #include <expected>
 #include <fcntl.h>
 #include <openssl/asn1.h>
+#include <openssl/bn.h>
 #include <openssl/evp.h>
 #include <openssl/obj_mac.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
+#include <optional>
 
 namespace crypto {
+
+[[nodiscard]] static auto generateAndSetSerialNumber(X509 *x509)
+    -> std::optional<std::string> {
+
+  if (x509 == nullptr) {
+    return std::optional("Trying to use an unitinialized x509 certificate.");
+  }
+
+  ASN1_INTEGER *serial = X509_get_serialNumber(x509);
+  if (serial == nullptr) {
+    return std::optional(
+        std::format("Failed to get serial number pointer from certificate. {}",
+                    openssl::getError()));
+  }
+
+  auto bigNum = openssl::BigNumPointer{BN_new()};
+  if (bigNum == nullptr) {
+    return std::optional(std::format(
+        "Couldn't allocate memory for the bignum. {}", openssl::getError()));
+  }
+
+  // Generating one bit less to ensure the first bit is 0 to make it a positive
+  // number
+  int serialNumberBits = ((X509Certificate::SerialNumberBytes * 8) - 1);
+
+  if (BN_rand(bigNum.get(), serialNumberBits, BN_RAND_TOP_ANY,
+              BN_RAND_TOP_ANY) != 1) {
+    return std::optional(std::format(
+        "Couldn't initialize the serial number. {}", openssl::getError()));
+  }
+
+  if (BN_to_ASN1_INTEGER(bigNum.get(), serial) == nullptr) {
+    return std::optional(std::format(
+        "Couldn't convert BigNum to ASN1 integer. {}", openssl::getError()));
+  }
+
+  return std::nullopt;
+}
 
 auto X509Certificate::createSelfSignedCA(std::string_view name,
                                          const RsaKeyPair &caKey) noexcept
@@ -31,9 +71,10 @@ auto X509Certificate::createSelfSignedCA(std::string_view name,
         "Couldn't set version for the certificate {}", openssl::getError()));
   }
 
-  logzy::trace("Setting version to: {}", X509SerialNumbercounter);
-  ASN1_INTEGER_set(X509_get_serialNumber(x509.get()),
-                   X509SerialNumbercounter++);
+  logzy::trace("Setting serial number");
+  if (auto err = generateAndSetSerialNumber(x509.get())) {
+    return std::unexpected(std::move(*err));
+  }
 
   if (X509_gmtime_adj(X509_get_notBefore(x509.get()), 0) == nullptr) {
     return std::unexpected(std::format(
@@ -146,11 +187,9 @@ X509Certificate::issue(const RsaKeyPair &subjectKey,
                     openssl::getError()));
   }
 
-  logzy::trace("Setting issued certificate version to: {}",
-               X509SerialNumbercounter);
-
-  ASN1_INTEGER_set(X509_get_serialNumber(x509.get()),
-                   X509SerialNumbercounter++);
+  if (auto err = generateAndSetSerialNumber(x509.get())) {
+    return std::unexpected(std::move(*err));
+  }
 
   if (X509_gmtime_adj(X509_get_notBefore(x509.get()), 0) == nullptr) {
     return std::unexpected(
@@ -335,7 +374,7 @@ auto X509Certificate::getCommonNameSafe() const -> std::string {
 }
 
 auto X509Certificate::getSerialNumberHex() const
-    -> std::expected<std::string, std::string> {
+    -> std::expected<SerialNumber, std::string> {
 
   // TODO :: This method would get more compilcated if correct BINNUM's were
   // used for certificate's serial numbers
@@ -347,8 +386,38 @@ auto X509Certificate::getSerialNumberHex() const
                                        openssl::getError()));
   }
 
-  return std::expected<std::string, std::string>(
-      std::string(reinterpret_cast<char *>(serial->data), serial->length));
+  auto bigNum = openssl::BigNumPointer{ASN1_INTEGER_to_BN(serial, nullptr)};
+  if (bigNum == nullptr) {
+    return std::unexpected(std::format(
+        "Failed to convert ASN1_INTEGER to BIGNUM. {}", openssl::getError()));
+  }
+
+  auto hexStr = openssl::String{BN_bn2hex(bigNum.get())};
+  if (hexStr == nullptr) {
+    return std::unexpected(std::format(
+        "Failed to convert BIGNUM to hex string. {}", openssl::getError()));
+  }
+  DEBUG_ASSERT(SerialNumberBytes == SerialNumber{}.size());
+  DEBUG_ASSERT(strlen(hexStr.get()) == SerialNumberBytes);
+
+  return std::expected<SerialNumber, std::string>{SerialNumber{hexStr.get()}};
+}
+
+[[nodiscard]] auto X509Certificate::getPublicKey() const noexcept
+    -> std::expected<crypto::RsaKeyPair, std::string> {
+  if (x509) {
+    return std::unexpected("Trying to use uninitialized certificate.");
+  }
+  auto key = openssl::RsaKeyPointer{X509_get_pubkey(x509.get())};
+
+  if (key == nullptr) {
+    return std::unexpected(
+        std::format("Couldn't extract public key form the certificate. {}",
+                    openssl::getError()));
+  }
+
+  return std::expected<crypto::RsaKeyPair, std::string>{
+      crypto::RsaKeyPair{.rawKey = std::move(key)}};
 }
 
 } // namespace crypto
