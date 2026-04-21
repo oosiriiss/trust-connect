@@ -1,3 +1,4 @@
+#include "common.hpp"
 #include "common/cli.hpp"
 #include "constants.hpp"
 #include "cppli/cppli.hpp"
@@ -5,6 +6,7 @@
 #include "crypto/aes.hpp"
 #include "crypto/base64.hpp"
 #include "crypto/crypto.hpp"
+#include "crypto/hash.hpp"
 #include "crypto/openssl.hpp"
 #include "crypto/rsa.hpp"
 #include "crypto/x509.hpp"
@@ -200,45 +202,31 @@ auto handleRegister(TtpState &state,
 
   logzy::trace("Saving client socket to map");
 
-  std::string userCertSerial;
-  if (auto serial = userCert.getSerialNumberHex()) {
-    userCertSerial = std::move(*serial);
-  } else {
-    logzy::error("Coulnd't  get user's certificate serila number");
-    return false;
-  }
-  {
-    std::lock_guard lock{clientRegistryMutex};
-    state.connectedClients.insert({userCertSerial, std::weak_ptr{client}});
-  }
-
-  logzy::debug("Replacing internal key clientName for it's id");
-
-  {
-    std::lock_guard lock{clientRegistryMutex};
-    logzy::trace("Finding if node with given id already exists.");
-    if (state.clientsPublicKeys.contains(id)) {
-      logzy::error("Entry with key {} already exists!", id);
-      return false;
-    }
-    logzy::trace(
-        "Key with id is not taken. Extracting the old node with key {}",
-        clientName);
-    auto node = state.clientsPublicKeys.extract(std::string{clientName});
-    if (node.empty()) {
-      logzy::error("Couldn't find node with key {}", clientName);
-      return false;
-    }
-    logzy::trace("Extracted. Switching keys from {} to {}", clientName,
-                 userCertSerial);
-    node.key() = std::move(userCertSerial);
-    logzy::trace("Inserting the node back");
-
-    state.clientsPublicKeys.insert(std::move(node));
-    logzy::trace("Done.");
-  }
-
   return true;
+}
+
+auto createSessionTicketPayload(std::string_view clientCn,
+                                std::string_view serverCn,
+                                const crypto::RsaKeyPair &ttpKey)
+    -> std::expected<nlohmann::json, std::string> {
+
+  SessionTicket ticket{.clientCn = std::string{clientCn},
+                       .serverCn = std::string{serverCn}};
+
+  if (auto res = crypto::openssl::generateRandomBytes<32>()) {
+    ticket.sessionId = crypto::hashToHex(*res);
+  } else {
+    return std::unexpected{
+        std::format("Couldn't genreate session id. {}", res.error())};
+  }
+
+  auto payload = ticket.toJson();
+
+  if (auto err = crypto::signPayload(ttpKey, payload)) {
+    return std::unexpected(
+        std::format("Couldn't sign session ticket. {}", *err));
+  }
+  return ticket.toJson();
 }
 
 auto handleServerAuthRequest(
@@ -330,14 +318,26 @@ auto handleServerAuthRequest(
     return false;
   }
 
+  nlohmann::json serverAuthPayload;
+  if (auto res =
+          createSessionTicketPayload(userCert.getCommonNameSafe(),
+                                     serverCert.getCommonNameSafe(), ttpKey)) {
+    serverAuthPayload = std::move(*res);
+  } else {
+    logzy::error("couldnt' create server auth packet payload. {}", res.error());
+    return false;
+  }
+
   if (auto err = serverSocket->send(network::Packet{
-          .type = network::PacketType::ServerAuthOk, .payload = {}})) {
+          .type = network::PacketType::ServerAuthOk,
+          .payload = std::move(serverAuthPayload),
+      })) {
     logzy::error("Couldn't send data to client {}. {}", clientName, *err);
     return false;
   }
 
-  std::string userCertSerial;
-  if (auto userCertSer = userCert.getSerialNumberHex()) {
+  std::string userCn;
+  if (auto res = userCert.getCommonName()) {
     userCertSerial = std::move(*userCertSer);
   } else {
     logzy::error("Couldn't get userCertSerial. {}", userCertSer.error());

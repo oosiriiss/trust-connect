@@ -166,8 +166,7 @@ auto signPayload(const RsaKeyPair &privateKey, nlohmann::json &payload)
   return std::nullopt;
 }
 
-auto verifyPayload(const X509Certificate &certificateWithPublicKey,
-                   nlohmann::json &payload)
+auto verifyPayload(const RsaKeyPair &publicKey, nlohmann::json &payload)
     -> std::expected<bool, std::string> {
   logzy::debug("Verifying payload's signature");
   std::string signature = payload.value("signature", "");
@@ -193,16 +192,7 @@ auto verifyPayload(const X509Certificate &certificateWithPublicKey,
         std::string{"Couldn't pop signature key from payload"});
   }
 
-  logzy::trace("Extracting the public key from CN={} certificate",
-               certificateWithPublicKey.getCommonNameSafe());
-
-  auto pubKey = certificateWithPublicKey.getPublicKey();
-  if (!pubKey) {
-    return std::unexpected{std::format(
-        "Couldn't obtain public key from the certificate. {}", pubKey.error())};
-  }
-
-  auto res = pubKey->verify(payload.dump(), signature);
+  auto res = publicKey.verify(payload.dump(), signature);
   if (!res) {
     return std::unexpected{std::format(
         "ERror occurred while  verifying signature. {}", res.error())};

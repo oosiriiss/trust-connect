@@ -39,7 +39,7 @@ auto decodeAndDecrypt(std::string_view encrypted, const crypto::Aes256 &key)
 auto signPayload(const RsaKeyPair &privateKey, nlohmann::json &payload)
     -> std::optional<std::string>;
 
-auto verifyPayload(const X509Certificate &certificateWithPublicKey,
-                   nlohmann::json &payload) -> std::expected<bool, std::string>;
+auto verifyPayload(const RsaKeyPair &publicKey, nlohmann::json &payload)
+    -> std::expected<bool, std::string>;
 
 } // namespace crypto

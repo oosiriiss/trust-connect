@@ -74,6 +74,7 @@ void estabilishConnection(network::TcpSocket &clientSocket,
     logzy::trace("Passing ServerAuthOk to client.");
 
     // passing to user
+
     if (auto err = clientSocket.send(*ttpVerificationResult)) {
       logzy::error("Couldnt' pass ServerAuthOk to client", *err);
       return;

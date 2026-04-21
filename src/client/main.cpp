@@ -44,6 +44,23 @@ struct AppState {
   TtpData ttpData;
 };
 
+auto verifyAndParseSessionTicket(nlohmann::json &payload,
+                                 const crypto::RsaKeyPair &ttpKey)
+    -> std::expected<SessionTicket, std::string> {
+
+  if (auto res = crypto::verifyPayload(ttpKey, payload)) {
+    if (!*res) {
+      return std::unexpected(
+          "Couldn't verify the payload's signature. It was invalid");
+    }
+  } else {
+    return std::unexpected(std::format(
+        "Couldn't verify the payload's signature. Error {}", res.error()));
+  }
+
+  return SessionTicket::fromJson(payload);
+}
+
 void estabilishSession(network::TcpSocket &serverSocket,
                        network::TcpSocket &ttpSocket, AppState &state,
                        const crypto::RsaKeyPair &clientKey,
@@ -60,6 +77,9 @@ void estabilishSession(network::TcpSocket &serverSocket,
     return;
   }
 
+  // TODO :: Service request should contian a nonce or stiemstamp signde with
+  // private key to prevent reply attacks
+
   if (auto err = serverSocket.send(
           network::Packet{.type = network::PacketType::ServiceRequest,
                           .payload = {
@@ -72,8 +92,7 @@ void estabilishSession(network::TcpSocket &serverSocket,
 
   logzy::debug("Waiting for TTP response forwarded by server.");
 
-  // TODO :: Add certificates
-
+  SessionTicket ticket;
   if (auto packet = serverSocket.receive()) {
     if (packet->type != network::PacketType::ServerAuthOk) {
       logzy::error(
@@ -83,13 +102,22 @@ void estabilishSession(network::TcpSocket &serverSocket,
     }
     logzy::trace("Recevied ServerAuthOk");
 
+    // Verifying server certificate
+
+    if (auto res = verifyAndParseSessionTicket(packet->payload, ttpPublicKey)) {
+      ticket = std::move(*res);
+    } else {
+      logzy::error("Couldn't veriy payload integrity. {}", res.error());
+      return;
+    }
+
   } else {
     logzy::error("Receiving failed. {}", packet.error());
     return;
   }
+  logzy::info("Session: {}", ticket.sessionId);
 
   // User  auth redirect happens here
-
   if (auto packet = ttpSocket.receive()) {
     if (packet->type != network::PacketType::UserAuthRedirect) {
       logzy::error(
@@ -109,7 +137,7 @@ void estabilishSession(network::TcpSocket &serverSocket,
           network::Packet{.type = network::PacketType::UserAuthDataSubmit,
                           .payload = {
                               {"user_cert_pem", userCertPem},
-
+                              {"session_id", ticket.sessionId},
                           }})) {
     logzy::error("Couldn't send user auth data to TTP. {}", *err);
     return;

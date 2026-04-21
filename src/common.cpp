@@ -1,5 +1,4 @@
 #include "common.hpp"
-#include "crypto/base64.hpp"
 #include "crypto/crypto.hpp"
 #include "crypto/hash.hpp"
 #include "crypto/rsa.hpp"
@@ -9,6 +8,38 @@
 #include "network/socket.hpp"
 #include <expected>
 #include <optional>
+
+auto SessionTicket::toJson() -> nlohmann::json {
+  return nlohmann::json{{"session_id", sessionId},
+                        {"client_cn", clientCn},
+                        {"server_cn", serverCn}};
+}
+
+auto SessionTicket::fromJson(const nlohmann::json &json)
+    -> std::expected<SessionTicket, std::string> {
+  std::expected<SessionTicket, std::string> ticket{SessionTicket{}};
+  logzy::debug("loading session ticket from json.");
+
+  const auto sessionId = json.value("session_in", std ::string_view{""});
+  const auto clientCn = json.value("client_cn", std ::string_view{""});
+  const auto serverCn = json.value("server_cn", std ::string_view{""});
+  if (sessionId.empty()) {
+    return std::unexpected("session id was empty");
+  }
+  if (clientCn.empty()) {
+    return std::unexpected("client_cn was empty");
+  }
+  if (serverCn.empty()) {
+    return std::unexpected("server_cn was empty");
+  }
+
+  ticket->sessionId = sessionId;
+  ticket->clientCn = clientCn;
+  ticket->serverCn = serverCn;
+
+  logzy::debug("session loadded.");
+  return ticket;
+}
 
 [[nodiscard]] auto connectTo(network::TcpSocket &socket,
                              const std::string &host, std::uint16_t port,
@@ -91,7 +122,7 @@ registerWithTtp(network::TcpSocket &socket, const crypto::Hash32 &id,
     receivedCert = std::move(*res);
   } else {
     logzy::error("Invalid certificate PEM. {}", res.error());
-      return false;
+    return false;
   }
 
   if (auto res = ttpData.certificate.verify(receivedCert)) {
