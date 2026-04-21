@@ -390,11 +390,9 @@ auto main(int argc, char const *const *const argv) -> int {
     return EXIT_FAILURE;
   }
 
-  if (!registerWithTtp(
-          ttpSocket,
-          std::format("Test clietn with id {}", crypto::hashToHex(state.id)),
-          state.id, publicKeyPem, state.clientCertificate, state.ttpCertificate,
-          ttpPublicKey)) {
+  if (!registerWithTtp(ttpSocket, crypto::hashToHex(state.id), state.id,
+                       ctx.rsaKey, state.clientCertificate,
+                       state.ttpCertificate, ttpPublicKey)) {
     return EXIT_FAILURE;
   }
   logzy::info("Successfully registerd with TTP");

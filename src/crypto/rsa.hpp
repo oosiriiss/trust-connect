@@ -24,7 +24,7 @@ public:
 
   [[nodiscard]] auto verify(std::string_view data,
                             std::string_view signature) const noexcept
-      -> std::expected<void, std::string>;
+      -> std::expected<bool, std::string>;
 
   [[nodiscard]] auto publicKeyPem() const
       -> std::expected<std::string, std::string>;

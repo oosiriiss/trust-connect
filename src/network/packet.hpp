@@ -7,7 +7,8 @@
 namespace network {
 
 enum class PacketType : std::int8_t {
-  TradePublicKeysWithTtpRequest,
+  CertificateRequest,
+  CertificateResponse,
   TradePublicKeysWithTtpResponse,
   RegisterRequest,
   RegisterResponse,
@@ -46,7 +47,7 @@ template <> struct std::formatter<network::PacketType> {
     using Type = network::PacketType;
     static std::unordered_map<Type, const char *> mappings{
 
-        {Type::TradePublicKeysWithTtpRequest, "TradePublicKeysWithTtpRequest"},
+        {Type::CertificateRequest, "TradePublicKeysWithTtpRequest"},
         {Type::TradePublicKeysWithTtpResponse,
          "TradePublicKeysWithTtpResponse"},
         {Type::RegisterRequest, "RegisterRequest"},

@@ -293,21 +293,9 @@ auto main(int argc, char const *const *const argv) -> int {
         }
         logzy::trace("Beggining registering with TTP");
 
-        std::string publicKeyPem;
-        logzy::trace("Generating public key PEM to send to TTP");
-
-        if (auto keyPemResult = ctx.rsaKey.publicKeyPem()) {
-          publicKeyPem = std::move(*keyPemResult);
-        } else {
-          logzy::error("couldn't generate public key PEM from key");
-          break;
-        }
-
-        if (!registerWithTtp(
-                ttpSocket,
-                std::format("Client with id {}", crypto::hashToHex(state.id)),
-                state.id, publicKeyPem, state.clientCertificate,
-                state.ttpCertificate, ttpPublicKey)) {
+        if (!registerWithTtp(ttpSocket, crypto::hashToHex(state.id), state.id,
+                             ctx.rsaKey, state.clientCertificate,
+                             state.ttpCertificate, ttpPublicKey)) {
           break;
         }
         logzy::info("Successfully registerd with TTP");

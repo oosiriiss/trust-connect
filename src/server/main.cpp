@@ -219,13 +219,9 @@ auto main(int argc, const char *const *const argv) -> int {
     return EXIT_FAILURE;
   }
 
-  std::string publicKeyPem;
-  if (auto pemResult = serverKey.publicKeyPem()) {
-    publicKeyPem = std::move(*pemResult);
   if (auto cert = crypto::X509Certificate::fromFile(crypto::TTP_CERT_PATH)) {
     ctx.ttpCertificate = std::move(*cert);
   } else {
-    logzy::critical("Couldn't generate servers RSA public PEM");
     logzy::critical("Couldn't load ttp certifiacte. {}", cert.error());
     return EXIT_FAILURE;
   }

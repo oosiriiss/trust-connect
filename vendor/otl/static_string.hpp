@@ -28,6 +28,10 @@ template <std::size_t Size> struct static_string {
 
   constexpr auto size() const noexcept -> std::size_t { return Size; }
 
+  constexpr operator std::string_view() const noexcept {
+    return std::string_view{data.data(), data.size()};
+  }
+
   std::array<char, Size> data;
 };
 

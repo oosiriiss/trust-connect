@@ -12,7 +12,7 @@
 
 [[nodiscard]] auto
 registerWithTtp(network::TcpSocket &socket, std::string_view name,
-                const crypto::Hash32 &id, const std::string &publicKeyPem,
+                const crypto::Hash32 &id, const crypto::RsaKeyPair &rsaKey,
                 crypto::X509Certificate &outClientCertificate,
                 crypto::X509Certificate &outCaCertificate,
                 crypto::RsaKeyPair &ttpPublicKey) -> bool;

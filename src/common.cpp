@@ -37,26 +37,54 @@
 
   // Hash to hex just for human readability.
   payload["public_key_pem"] = publicKeyPem;
-  return network::Packet{.type =
-                             network::PacketType::TradePublicKeysWithTtpRequest,
+  return network::Packet{.type = network::PacketType::CertificateRequest,
                          .payload = std::move(payload)};
 }
 
 [[nodiscard]] auto
 registerWithTtp(network::TcpSocket &socket, std::string_view name,
-                const crypto::Hash32 &id, const std::string &publicKeyPem,
+                const crypto::Hash32 &id, const crypto::RsaKeyPair &rsaKey,
                 crypto::X509Certificate &outClientCertificate,
                 crypto::X509Certificate &outCaCertificate,
                 crypto::RsaKeyPair &ttpPublicKey) -> bool {
 
-  logzy::info("Registering with TTP");
+  std::string publicKeyPem;
+  if (auto res = rsaKey.publicKeyPem()) {
+    publicKeyPem = std::move(*res);
+  } else {
+    logzy::error("Couldnt' create public key pem. {}", res.error());
+    return false;
+  }
 
-  logzy::trace("Sending own public key and requesting TTP's public key");
-  if (auto err = socket.send(createRegisterPacket(publicKeyPem))) {
+  nlohmann::json payload = {
+      {"common_name", name},
+      {"public_key_pem", std::move(publicKeyPem)},
+  };
+
+  logzy::debug("Siginig the request payload.");
+  std::string signature;
+  if (auto res = rsaKey.sign(payload.dump())) {
+
+      if(auto encode = 
+    signature = std::move(*res);
+  } else {
+    logzy::error("Couldn't sign the payload. {}", res.error());
+    return false;
+  }
+
+   
+
+  payload["signature"] = std::move(signature);
+
+  logzy::info("Registering with TTP");
+  logzy::trace("Requesting TTP's certificate.");
+  if (auto err = socket.send({.type = network::PacketType::CertificateRequest,
+                              .payload = std::move(payload)})) {
     logzy::error("Couldn't send packet to TTP: {}", *err);
     return false;
   }
-  logzy::trace("Own public key sent. Waiting for response");
+
+  logzy::trace("Requested. Waiting for response");
   auto received = socket.receive();
   if (!received) {
     logzy::error("There was an error when received packet from TTP. {}",
@@ -66,6 +94,32 @@ registerWithTtp(network::TcpSocket &socket, std::string_view name,
 
   if (received->type != network::PacketType::TradePublicKeysWithTtpResponse) {
     logzy::error("TTP Sent wrong packet when registering. {}", *received);
+    return false;
+  }
+
+  std::string cert = received->payload.value("certificate_pem", "");
+  std::string caCert = received->payload.value("ttp_ca_certificate_pem", "");
+  signature = received->payload.value("signature", "");
+  received->payload.erase("signature");
+
+  if (cert.empty() || caCert.empty() || signature.empty()) {
+    logzy::error("insufficient data");
+  }
+
+  crypto::X509Certificate ttpCert;
+  if (auto res = crypto::X509Certificate::fromPem(caCert)) {
+    ttpCert = std::move(*res);
+  } else {
+    logzy::error("couldn't load ca cert");
+    return false;
+  }
+
+  crypto::X509Certificate ownCert;
+
+  if (auto res = crypto::X509Certificate::fromPem(cert)) {
+    ownCert = std::move(*res);
+  } else {
+    logzy::error("couldn't load own cert");
     return false;
   }
 

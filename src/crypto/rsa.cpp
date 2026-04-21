@@ -141,7 +141,7 @@ auto RsaKeyPair::sign(std::string_view data) const noexcept
 
 auto RsaKeyPair::verify(std::string_view data,
                         std::string_view signature) const noexcept
-    -> std::expected<void, std::string> {
+    -> std::expected<bool, std::string> {
   logzy::debug("Verifying signature");
   logzy::trace("Signature: '{}'\nData size:\n '{}'", signature, data.size());
 
@@ -172,11 +172,12 @@ auto RsaKeyPair::verify(std::string_view data,
   }
 
   if (result == 0) {
-    return std::unexpected("Verification failed. The signature doesn't match.");
+    logzy::trace("Verification failed. The signature doesn't match.");
+    return false;
   }
 
   logzy::debug("Verification success");
-  return {};
+  return true;
 }
 
 auto RsaKeyPair::publicKeyPem() const

@@ -395,11 +395,11 @@ auto handleServerAuthRequest(
     std::lock_guard lock{clientRegistryMutex};
     logzy::trace("Inserted waiting for user {}", userCertPem);
 
-    if (auto userCertSerial = userCert.getSerialNumberHex()) {
+    if (auto userCN = userCert.getCommonName()) {
       state.pendingAuthentications.insert(
-          {*userCertSerial, std::weak_ptr{serverSocket}});
+          {*userCN, std::weak_ptr{serverSocket}});
     } else {
-      logzy::error("Couldn't get user cert serial. {}", userCertSerial.error());
+      logzy::error("Couldn't get user cert serial. {}", userCN.error());
       return false;
     }
   }
@@ -438,7 +438,7 @@ auto encryptClientSessionKey(const TtpState &state,
   return encryptedClientKey;
 }
 
-auto findServerId(const TtpState &state, std::string_view clientSerial)
+auto findServerId(const TtpState &state, std::string_view clientCN)
     -> std::expected<std::string_view, std::string> {
 
   std::lock_guard lock{clientRegistryMutex};
@@ -446,8 +446,8 @@ auto findServerId(const TtpState &state, std::string_view clientSerial)
   const network::TcpSocket *serverSocket{nullptr};
 
   // Finding socket that waits for curerent user to authenticate
-  for (const auto &[userSerial, sock] : state.pendingAuthentications) {
-    if (userSerial == clientSerial) {
+  for (const auto &[userCN, sock] : state.pendingAuthentications) {
+    if (userCN == clientCN) {
       if (auto sockPtr = sock.lock()) {
         serverSocket = sockPtr.get();
       }
@@ -504,15 +504,15 @@ auto handleUserAuthDataSubmit(TtpState &state,
     return false;
   }
 
-  std::string userCertSerial;
-  if (auto res = userCert.getSerialNumberHex()) {
-    userCertSerial = std::move(*res);
+  std::string userCN;
+  if (auto res = userCert.getCommonName()) {
+    userCN = *res;
   } else {
     logzy::error("Coulnd't get serial number. {}", res.error());
     return false;
   }
 
-  auto waitingServer = state.pendingAuthentications.find(userCertSerial);
+  auto waitingServer = state.pendingAuthentications.find(userCN);
   if (waitingServer == state.pendingAuthentications.end()) {
     logzy::error("No server is waiting for user with id {} authentication",
                  userCertPem);
@@ -532,7 +532,7 @@ auto handleUserAuthDataSubmit(TtpState &state,
 
   std::string_view serverId;
 
-  if (auto serverCertSerial = findServerId(state, userCertSerial)) {
+  if (auto serverCertSerial = findServerId(state, userCN)) {
     serverId = *serverCertSerial;
   }
 
@@ -541,8 +541,7 @@ auto handleUserAuthDataSubmit(TtpState &state,
   std::string encryptedServerSessionKey;
   std::string encryptedClientSessionKey;
 
-  if (auto encSessKey =
-          encryptClientSessionKey(state, userCertSerial, sessionKey)) {
+  if (auto encSessKey = encryptClientSessionKey(state, userCN, sessionKey)) {
     encryptedClientSessionKey = std::move(*encSessKey);
   } else {
     logzy::error("Couldn't encrypt clients's session key. {}",
@@ -595,15 +594,15 @@ auto handleUserAuthDataSubmit(TtpState &state,
   return true;
 }
 
-auto handlePacket(TtpState &state, const network::Packet &packet,
+auto handlePacket(TtpState &state, network::Packet &packet,
                   std::shared_ptr<network::TcpSocket> &client,
                   std::string_view clientName, const crypto::RsaKeyPair &ttpKey)
     -> bool {
 
   switch (packet.type) {
-  case network::PacketType::TradePublicKeysWithTtpRequest:
-    return handleTradePublicKeys(state, client, clientName, ttpKey,
-                                 packet.payload);
+  case network::PacketType::CertificateRequest:
+    return handleRequestCaCertificate(state, client, clientName, ttpKey,
+                                      packet.payload);
   case network::PacketType::RegisterRequest:
     return handleRegister(state, client, clientName, ttpKey, packet.payload);
   case network::PacketType::ServerAuthRequest:
@@ -612,6 +611,10 @@ auto handlePacket(TtpState &state, const network::Packet &packet,
     return false;
   case network::PacketType::UserAuthDataSubmit:
     return handleUserAuthDataSubmit(state, client, packet, clientName, ttpKey);
+  case network::PacketType::DataRequest:
+    [[fallthrough]];
+  case network::PacketType::DataResponse:
+    [[fallthrough]];
   case network::PacketType::UserAuthOk:
     [[fallthrough]];
   case network::PacketType::UserAuthRedirect:
@@ -628,6 +631,8 @@ auto handlePacket(TtpState &state, const network::Packet &packet,
     logzy::error("Invalid packet received: {}", packet.type);
     return false;
     break;
+    break;
+  case network::PacketType::CertificateResponse:
     break;
   }
   return true;
