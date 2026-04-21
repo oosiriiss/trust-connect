@@ -15,14 +15,21 @@ public:
                                                const RsaKeyPair &caKey) noexcept
       -> std::expected<X509Certificate, std::string>;
 
+  [[nodiscard]] static auto fromPem(std::string_view pem) noexcept
+      -> std::expected<X509Certificate, std::string>;
+
+  [[nodiscard]] static auto fromFile(std::string_view pathStr)
+      -> std::expected<X509Certificate, std::string>;
+
   [[nodiscard]] auto issue(const RsaKeyPair &subjectKey,
                            std::string_view subjectName,
                            const RsaKeyPair &caKey) const noexcept
       -> std::expected<X509Certificate, std::string>;
 
   [[nodiscard]] auto toPem() const -> std::expected<std::string, std::string>;
-  [[nodiscard]] static auto fromPem(std::string_view pem) noexcept
-      -> std::expected<X509Certificate, std::string>;
+
+  [[nodiscard]] auto saveToFile(std::string_view pathStr) const
+      -> std::optional<std::string>;
 
   // Verifies that the certificate was signed by this certificate
   //

@@ -361,6 +361,13 @@ auto main(int argc, char const *const *const argv) -> int {
 
   AppState state{};
 
+  if (auto cert = crypto::X509Certificate::fromFile(crypto::TTP_CERT_PATH)) {
+    state.ttpCertificate = std::move(*cert);
+  } else {
+    logzy::critical("Couldn't load ttp certifiacte. {}", cert.error());
+    return EXIT_FAILURE;
+  }
+
   if (auto idExp = crypto::generateRandomId("UserSeed")) {
     state.id = *idExp;
     logzy::info("Created user id: {}", crypto::hashToHex(state.id));

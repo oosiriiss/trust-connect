@@ -222,18 +222,19 @@ auto main(int argc, const char *const *const argv) -> int {
   std::string publicKeyPem;
   if (auto pemResult = serverKey.publicKeyPem()) {
     publicKeyPem = std::move(*pemResult);
+  if (auto cert = crypto::X509Certificate::fromFile(crypto::TTP_CERT_PATH)) {
+    ctx.ttpCertificate = std::move(*cert);
   } else {
     logzy::critical("Couldn't generate servers RSA public PEM");
+    logzy::critical("Couldn't load ttp certifiacte. {}", cert.error());
     return EXIT_FAILURE;
   }
 
   crypto::RsaKeyPair ttpPublicKey;
 
-  if (!registerWithTtp(
-          ttpSocket,
-          std::format("Server with id {}", crypto::hashToHex(ctx.id)), ctx.id,
-          publicKeyPem, ctx.serverCertificate, ctx.ttpCertificate,
-          ttpPublicKey)) {
+  if (!registerWithTtp(ttpSocket, crypto::hashToHex(ctx.id), ctx.id, serverKey,
+                       ctx.serverCertificate, ctx.ttpCertificate,
+                       ttpPublicKey)) {
     return EXIT_FAILURE;
   }
 

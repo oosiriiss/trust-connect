@@ -13,12 +13,9 @@
 #include "network/socket.hpp"
 #include "ttp/cli.hpp"
 #include "utility.hpp"
-#include <chrono>
 #include <cstdlib>
 #include <expected>
 #include <memory>
-#include <print>
-#include <random>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -45,60 +42,99 @@ struct TtpState {
       connectedClients;
 };
 
-auto handleTradePublicKeys(TtpState &state,
-                           std::shared_ptr<network::TcpSocket> &client,
-                           std::string_view clientName,
-                           const crypto::RsaKeyPair &ttpKey,
-                           const nlohmann::json &payload) -> bool {
+auto handleRequestCaCertificate(TtpState &state,
+                                std::shared_ptr<network::TcpSocket> &client,
+                                std::string_view clientName,
+                                const crypto::RsaKeyPair &ttpKey,
+                                nlohmann::json &payload) -> bool {
 
   logzy::trace("Received TradePublicKeysWithTtp packet from {}", clientName);
-  logzy::trace("Looking for 'public_key_pem' in the payload");
 
-  auto clientPublicKeyPem =
-      payload.value("public_key_pem", std::string_view{""});
-
-  if (clientPublicKeyPem.empty()) {
-    logzy::error("Client didn't send object with 'public_key_pem' json field "
-                 "for TradePublicKeysWithTtp packet. Payload:\n{}",
-                 payload.dump());
+  // Verifying the sent data
+  if (payload.value("common_name", "").empty()) {
+    logzy::error("no common name");
+    return false;
+  }
+  if (payload.value("public_key_pem", "").empty()) {
+    logzy::error("no pubkey name");
+    return false;
+  }
+  if (payload.value("signature", "").empty()) {
+    logzy::error("no signature name");
     return false;
   }
 
+  auto commonName = payload.value("common_name", std::string_view{""});
+  auto publicKeyPem = payload.value("public_key_pem", std::string_view{""});
+  std::string signature = payload.value("signature", "");
+
+  // removing signature to verify integrity
+  payload.erase("signature");
   crypto::RsaKeyPair clientKeyPair;
-  logzy::trace("creating RSA Key from {}'s public key PEM", clientName);
 
-  if (auto keyResult = crypto::RsaKeyPair::fromPublicPem(clientPublicKeyPem)) {
-    clientKeyPair = std::move(*keyResult);
+  if (auto res = crypto::RsaKeyPair::fromPublicPem(publicKeyPem)) {
+    clientKeyPair = std::move(*res);
   } else {
-    logzy::error("Couldn't create RSA key from {}'s public Key. key PEM:\n{}",
-                 clientName, clientPublicKeyPem);
+    logzy::error("Couldn't parse client's public key pem. {}", res.error());
     return false;
   }
 
-  {
-    std::lock_guard lock{clientRegistryMutex};
-    DEBUG_ASSERT(!state.clientsPublicKeys.contains(clientName));
-    state.clientsPublicKeys.emplace(clientName, std::move(clientKeyPair));
-  }
-
-  std::string ttpPublicKeyPem;
-  if (auto publicKeyResult = ttpKey.publicKeyPem()) {
-    ttpPublicKeyPem = std::move(*publicKeyResult);
+  logzy::trace("Veirfying signature");
+  if (auto res = clientKeyPair.verify(payload.dump(), signature)) {
+    if (!res) {
+      logzy::error("Verification failed. invalid siganture. {}", signature);
+      return false;
+    }
   } else {
-    logzy::error("Couldn't create PEM from TTP's public key.");
+    logzy::error("Couldnt' verify signautre. error. {}", res.error());
     return false;
   }
 
-  logzy::trace("Sending TTP's public key PEM to the {}.PEM:\n{}", clientName,
-               ttpPublicKeyPem);
+  crypto::X509Certificate userCert;
+  if (auto certRes =
+          state.ttpCertificate.issue(clientKeyPair, clientName, ttpKey)) {
+    userCert = std::move(*certRes);
+  } else {
+    logzy::error("Couldn't create user's certificate.{}", certRes.error());
+  }
+  logzy::trace("Created user certificate for CN '{}'",
+               userCert.getCommonNameSafe());
 
-  if (auto err = client->send(network::Packet{
-          .type = network::PacketType::TradePublicKeysWithTtpResponse,
-          .payload = {
-              {"public_key_pem", std::move(ttpPublicKeyPem)},
-          }})) {
-    logzy::error("Couldn't send TTP's public key pem to the {}. {}", clientName,
-                 *err);
+  logzy::trace("Sending client it's certificate");
+
+  std::string userCertPem;
+  std::string ttpCertPem;
+
+  if (auto res = userCert.toPem()) {
+    userCertPem = std::move(*res);
+  } else {
+    logzy::error("Couldn't convert usercertificate to PEM");
+    return false;
+  }
+
+  if (auto res = state.ttpCertificate.toPem()) {
+    ttpCertPem = std::move(*res);
+  } else {
+    logzy::error("Couldn't convert ttp certificate to PEM");
+    return false;
+  }
+
+  nlohmann::json responsePayload = {
+      {"certificate_pem", std::move(userCertPem)},
+      {"ttp_ca_certificate_pem", std::move(ttpCertPem)}};
+
+  if (auto signature = ttpKey.sign(responsePayload.dump())) {
+    logzy::trace("Signed. {}", *signature);
+    responsePayload["signature"] = std::move(*signature);
+  } else {
+    logzy::error("Couldn't sign the payload. {}", signature.error());
+    return false;
+  }
+
+  if (auto err = client->send(
+          network::Packet{.type = network::PacketType::RegisterResponse,
+                          .payload = std::move(payload)})) {
+    logzy::error("error while sending. {}", *err);
     return false;
   }
 
@@ -666,6 +702,13 @@ auto main(int argc, const char *const *const argv) -> int {
     return EXIT_FAILURE;
   }
 
+  // udmping cert to file
+
+  if (auto err = state.ttpCertificate.saveToFile(crypto::TTP_CERT_PATH)) {
+    logzy::error("{}", *err);
+    return EXIT_FAILURE;
+  }
+
   network::TcpServer server;
   if (auto err = server.listen(programArgs->bindPort)) {
     logzy::critical("TTP Server listen failed. Reason: {}", *err);
@@ -675,7 +718,6 @@ auto main(int argc, const char *const *const argv) -> int {
   std::vector<std::jthread> threadHandles;
   int clientCounter = 0;
   while (true) {
-
     logzy::info("Waiting for connection");
 
     if (auto client = server.accept()) {

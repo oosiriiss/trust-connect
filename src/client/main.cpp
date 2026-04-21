@@ -3,6 +3,7 @@
 #include "client/cli.hpp"
 #include "common.hpp"
 #include "common/cli.hpp"
+#include "constants.hpp"
 #include "crypto/aes.hpp"
 #include "crypto/base64.hpp"
 #include "crypto/crypto.hpp"
@@ -252,6 +253,15 @@ auto main(int argc, char const *const *const argv) -> int {
   crypto::RsaKeyPair ttpPublicKey;
 
   AppState state{};
+
+  if (auto cert = crypto::X509Certificate::fromFile(crypto::TTP_CERT_PATH)) {
+    state.ttpCertificate = std::move(*cert);
+  } else {
+    logzy::critical("Couldn't load ttp certifiacte. {}", cert.error());
+    return EXIT_FAILURE;
+  }
+  logzy::info("Loaded ttp key");
+
   while (glfwWindowShouldClose(ctx.window) == 0) {
     if (!beginFrame(ctx)) {
       continue;

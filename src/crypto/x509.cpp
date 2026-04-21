@@ -6,6 +6,7 @@
 
 #include <expected>
 #include <fcntl.h>
+#include <filesystem>
 #include <openssl/asn1.h>
 #include <openssl/bn.h>
 #include <openssl/evp.h>
@@ -418,6 +419,59 @@ auto X509Certificate::getSerialNumberHex() const
 
   return std::expected<crypto::RsaKeyPair, std::string>{
       crypto::RsaKeyPair{.rawKey = std::move(key)}};
+}
+
+auto X509Certificate::fromFile(std::string_view pathStr)
+    -> std::expected<X509Certificate, std::string> {
+
+  std::filesystem::path path{pathStr};
+
+  if (!std::filesystem::exists(path)) {
+    return std::unexpected(std::format("Path '{}' doesn't exists", path));
+  }
+
+  openssl::BioPointer bio(BIO_new_file(path.string().c_str(), "r"));
+  if (!bio) {
+    return std::unexpected(std::format(
+        "Failed to open file for reading: {}. {}", path, openssl::getError()));
+  }
+
+  X509 *rawCert = PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr);
+  if (rawCert == nullptr) {
+    return std::unexpected(
+        std::format("Failed to parse PEM certificate from file: {}. {}", path,
+                    openssl::getError()));
+  }
+
+  std::expected<X509Certificate, std::string> cert{X509Certificate{}};
+  cert->x509.reset(rawCert);
+  return cert;
+}
+
+auto X509Certificate::saveToFile(std::string_view pathStr) const
+    -> std::optional<std::string> {
+  if (!x509) {
+    return "Cannot save empty certificate (internal X509 pointer is null).";
+  }
+
+  std::filesystem::path path{pathStr};
+
+  if (std::filesystem::exists(path)) {
+    logzy::warn("Overwriting certificate at path {}", path);
+  }
+
+  openssl::BioPointer bio(BIO_new_file(path.string().c_str(), "w"));
+  if (!bio) {
+    return std::format("Failed to open file for writing: {}. {}", path,
+                       openssl::getError());
+  }
+
+  if (PEM_write_bio_X509(bio.get(), x509.get()) != 1) {
+    return std::format("Failed to write certificate to file: {}. {}", path,
+                       openssl::getError());
+  }
+
+  return std::nullopt;
 }
 
 } // namespace crypto
