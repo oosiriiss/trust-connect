@@ -1,5 +1,5 @@
-#include "common.hpp"
 #include "common/cli.hpp"
+#include "common/protocol.hpp"
 #include "constants.hpp"
 #include "cppli/cppli.hpp"
 #include "cppli/vendor/debug_utils.hpp"
@@ -146,8 +146,8 @@ auto createSessionTicketPayload(std::string_view clientCn,
                                 const crypto::RsaKeyPair &ttpKey)
     -> std::expected<nlohmann::json, std::string> {
 
-  SessionTicket ticket{.clientCn = std::string{clientCn},
-                       .serverCn = std::string{serverCn}};
+  protocol::SessionTicket ticket{.clientCn = std::string{clientCn},
+                                 .serverCn = std::string{serverCn}};
 
   if (auto res = crypto::openssl::generateRandomBytes<32>()) {
     ticket.sessionId = crypto::hashToHex(*res);
@@ -475,6 +475,8 @@ auto handlePacket(TtpState &state, network::Packet &packet,
   case network::PacketType::ServiceRequest:
     [[fallthrough]];
   case network::PacketType::ServerAuthOk:
+    [[fallthrough]];
+  case network::PacketType::DataRequest:
     [[fallthrough]];
   case network::PacketType::__SizeGuard:
     [[fallthrough]];

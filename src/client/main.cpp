@@ -1,8 +1,8 @@
 
 #include "client/application.hpp"
 #include "client/cli.hpp"
-#include "common.hpp"
 #include "common/cli.hpp"
+#include "common/protocol.hpp"
 #include "constants.hpp"
 #include "crypto/aes.hpp"
 #include "crypto/base64.hpp"
@@ -41,149 +41,8 @@ struct AppState {
   crypto::X509Certificate clientCertificate;
   std::vector<std::string> sentMessages;
   std::vector<std::string> serverResponses;
-  TtpData ttpData;
+  protocol::TtpData ttpData;
 };
-
-auto verifyAndParseSessionTicket(nlohmann::json &payload,
-                                 const crypto::RsaKeyPair &ttpKey)
-    -> std::expected<SessionTicket, std::string> {
-
-  if (auto res = crypto::verifyPayload(ttpKey, payload)) {
-    if (!*res) {
-      return std::unexpected(
-          "Couldn't verify the payload's signature. It was invalid");
-    }
-  } else {
-    return std::unexpected(std::format(
-        "Couldn't verify the payload's signature. Error {}", res.error()));
-  }
-
-  return SessionTicket::fromJson(payload);
-}
-
-void estabilishSession(network::TcpSocket &serverSocket,
-                       network::TcpSocket &ttpSocket, AppState &state,
-                       const crypto::RsaKeyPair &clientKey) {
-
-  logzy::debug("Requesting service from server");
-  logzy::trace("Encrypting user id with ttp's public key");
-
-  std::string userCertPem;
-  if (auto certResult = state.clientCertificate.toPem()) {
-    userCertPem = std::move(*certResult);
-  } else {
-    logzy::error("Couldn't encrypt user's id. {}", certResult.error());
-    return;
-  }
-
-  // TODO :: Service request should contian a nonce or stiemstamp signde with
-  // private key to prevent reply attacks
-
-  if (auto err = serverSocket.send(
-          network::Packet{.type = network::PacketType::ServiceRequest,
-                          .payload = {
-                              {"user_cert_pem", userCertPem},
-                          }})) {
-
-    logzy::error("ServiceRequest failed. {}", *err);
-    return;
-  }
-
-  logzy::debug("Waiting for TTP response forwarded by server.");
-
-  SessionTicket ticket;
-  if (auto packet = ttpSocket.receive()) {
-    if (packet->type != network::PacketType::ServerAuthOk) {
-      logzy::error(
-          "Received wrong type of packet. {} and expected ServerAuthResponse",
-          packet->type);
-      return;
-    }
-    logzy::trace("Recevied ServerAuthOk. {}", packet->payload.dump());
-
-    // Verifying server certificate
-
-    if (auto res = verifyAndParseSessionTicket(packet->payload,
-                                               state.ttpData.publicKey)) {
-      ticket = std::move(*res);
-    } else {
-      logzy::error("Couldn't veriy payload integrity. {}", res.error());
-      return;
-    }
-
-  } else {
-    logzy::error("Receiving failed. {}", packet.error());
-    return;
-  }
-  logzy::info("Session: {}", ticket.sessionId);
-
-  // User  auth redirect happens here
-  if (auto packet = ttpSocket.receive()) {
-    if (packet->type != network::PacketType::UserAuthRedirect) {
-      logzy::error(
-          "Received wrong type of packet. {} and expected UserAuthRedirect",
-          packet->type);
-      return;
-    }
-
-  } else {
-    logzy::error("Receving failed. {}", packet.error());
-    return;
-  }
-
-  logzy::trace("Sending user auth data to TTP");
-
-  if (auto err = ttpSocket.send(
-          network::Packet{.type = network::PacketType::UserAuthDataSubmit,
-                          .payload = {
-                              {"user_cert_pem", userCertPem},
-                              {"session_id", ticket.sessionId},
-                          }})) {
-    logzy::error("Couldn't send user auth data to TTP. {}", *err);
-    return;
-  }
-
-  // Server should notify the client that its ok and pass the sssion key
-
-  if (auto authResult = ttpSocket.receive()) {
-    if (authResult->type != network::PacketType::UserAuthOk) {
-      logzy::error("User auth failed. expected UserAuthOk packet but got {}",
-                   authResult->type);
-      return;
-    }
-
-    const auto clientSessionKey =
-        authResult->payload.value("client_session_key", std::string_view{""});
-
-    if (clientSessionKey.empty()) {
-      logzy::error(
-          "Server didn't send AES 256 GCM session key with UserAuthOk packet.");
-      return;
-    }
-
-    if (auto keyString =
-            crypto::decodeAndDecrypt(clientSessionKey, clientKey)) {
-
-      if (auto aes = crypto::Aes256::fromKey(*keyString)) {
-        state.sessionKey = std::move(*aes);
-        state.stage = AppStage::Authenticated;
-      } else {
-        logzy::error("Couldnt create AES 256 GCM form key '{}'. {}", *keyString,
-                     aes.error());
-        return;
-      }
-    } else {
-      logzy::error("Couldn't decode and decrypt aes key. {}",
-                   keyString.error());
-      return;
-    }
-
-    logzy::info("Session key: {}", state.sessionKey.getRawKey());
-
-  } else {
-    logzy::error("Receiving from clietn failed. {}", authResult.error());
-  }
-}
 
 void sendData(std::string_view data, network::TcpSocket &serverSocket,
               AppState &state) {
@@ -268,13 +127,14 @@ auto main(int argc, char const *const *const argv) -> int {
   }
 
   network::TcpSocket serverSocket;
-  if (!connectTo(serverSocket, args->serverIp, args->serverPort, "Server")) {
+  if (!protocol::connectTo(serverSocket, args->serverIp, args->serverPort,
+                           "Server")) {
     return EXIT_FAILURE;
   }
 
   network::TcpSocket ttpSocket;
-  if (!connectTo(ttpSocket, args->ttpIp, args->ttpPort,
-                 "Trusted third party")) {
+  if (!protocol::connectTo(ttpSocket, args->ttpIp, args->ttpPort,
+                           "Trusted third party")) {
     return EXIT_FAILURE;
   }
 
@@ -328,9 +188,12 @@ auto main(int argc, char const *const *const argv) -> int {
         }
         logzy::trace("Beggining registering with TTP");
 
-        if (!registerWithTtp(ttpSocket, state.id, ctx.rsaKey, state.ttpData,
-                             state.clientCertificate)) {
-          break;
+        if (auto cert = protocol::registerWithTtp(ttpSocket, state.id,
+                                                  ctx.rsaKey, state.ttpData)) {
+          state.clientCertificate = std::move(*cert);
+          state.stage = AppStage::Registered;
+        } else {
+          logzy::error("Couldnt register. {}", cert.error());
         }
         logzy::info("Successfully registerd with TTP");
         state.stage = AppStage::Registered;
@@ -340,7 +203,15 @@ auto main(int argc, char const *const *const argv) -> int {
       case AppStage::Registered: {
 
         if (ImGui::Button("Request service")) {
-          estabilishSession(serverSocket, ttpSocket, state, ctx.rsaKey);
+          if (auto sessionKey = protocol::establishSessionClient(
+                  serverSocket, ttpSocket, state.clientCertificate, ctx.rsaKey,
+                  state.ttpData.publicKey)) {
+            state.sessionKey = std::move(*sessionKey);
+            state.stage = AppStage::Authenticated;
+            logzy::info("Session key obtained.");
+          } else {
+            logzy::error("{}", sessionKey.error());
+          }
         }
 
       } break;

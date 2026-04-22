@@ -57,8 +57,8 @@ add_library(
    src/crypto/x509.hpp
    src/crypto/x509.cpp
 
-   src/common.hpp
-   src/common.cpp
+   src/common/protocol.hpp
+   src/common/protocol.cpp
 )
 
 add_executable(
