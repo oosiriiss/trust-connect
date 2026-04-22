@@ -72,13 +72,7 @@ void estabilishConnection(network::TcpSocket &clientSocket,
     }
 
     logzy::trace("Passing ServerAuthOk to client.");
-
     // passing to user
-
-    if (auto err = clientSocket.send(*ttpVerificationResult)) {
-      logzy::error("Couldnt' pass ServerAuthOk to client", *err);
-      return;
-    }
   } else {
     logzy::error("Couldn't receive TTP's verification packet. {}",
                  ttpVerificationResult.error());
@@ -96,18 +90,10 @@ void estabilishConnection(network::TcpSocket &clientSocket,
 
     const auto serverSessionKey = clientAuthResult->payload.value(
         "server_session_key", std::string_view{""});
-    const auto clientSessionKey = clientAuthResult->payload.value(
-        "client_session_key", std::string_view{""});
 
-    if (serverSessionKey.empty() || clientSessionKey.empty()) {
-      logzy::error("USerAuthOk packet sohould have server_session_key and "
-                   "client_session_key json fields.");
+    if (serverSessionKey.empty()) {
+      logzy::error("USerAuthOk packet sohould have server_session_key");
       return;
-    }
-
-    if (auto err = clientSocket.send(*clientAuthResult)) {
-      logzy::error("Couldn't forward clientAuthResult packet to the client. {}",
-                   *err);
     }
 
     // TODO :: Store them somewhere

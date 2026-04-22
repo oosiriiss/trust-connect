@@ -144,6 +144,9 @@ auto RsaKeyPair::verify(std::string_view data,
     -> std::expected<bool, std::string> {
   logzy::debug("Verifying signature");
   logzy::trace("Signature: '{}'\nData size:\n '{}'", signature, data.size());
+  if (rawKey == nullptr) {
+    return std::unexpected("EVP_PKEY is null. key was not loaded.");
+  }
 
   auto ctx = openssl::MdCtxPointer{EVP_MD_CTX_new()};
   if (ctx == nullptr) {

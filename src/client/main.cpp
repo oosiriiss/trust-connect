@@ -63,8 +63,7 @@ auto verifyAndParseSessionTicket(nlohmann::json &payload,
 
 void estabilishSession(network::TcpSocket &serverSocket,
                        network::TcpSocket &ttpSocket, AppState &state,
-                       const crypto::RsaKeyPair &clientKey,
-                       const crypto::RsaKeyPair &ttpPublicKey) {
+                       const crypto::RsaKeyPair &clientKey) {
 
   logzy::debug("Requesting service from server");
   logzy::trace("Encrypting user id with ttp's public key");
@@ -93,18 +92,19 @@ void estabilishSession(network::TcpSocket &serverSocket,
   logzy::debug("Waiting for TTP response forwarded by server.");
 
   SessionTicket ticket;
-  if (auto packet = serverSocket.receive()) {
+  if (auto packet = ttpSocket.receive()) {
     if (packet->type != network::PacketType::ServerAuthOk) {
       logzy::error(
           "Received wrong type of packet. {} and expected ServerAuthResponse",
           packet->type);
       return;
     }
-    logzy::trace("Recevied ServerAuthOk");
+    logzy::trace("Recevied ServerAuthOk. {}", packet->payload.dump());
 
     // Verifying server certificate
 
-    if (auto res = verifyAndParseSessionTicket(packet->payload, ttpPublicKey)) {
+    if (auto res = verifyAndParseSessionTicket(packet->payload,
+                                               state.ttpData.publicKey)) {
       ticket = std::move(*res);
     } else {
       logzy::error("Couldn't veriy payload integrity. {}", res.error());
@@ -145,7 +145,7 @@ void estabilishSession(network::TcpSocket &serverSocket,
 
   // Server should notify the client that its ok and pass the sssion key
 
-  if (auto authResult = serverSocket.receive()) {
+  if (auto authResult = ttpSocket.receive()) {
     if (authResult->type != network::PacketType::UserAuthOk) {
       logzy::error("User auth failed. expected UserAuthOk packet but got {}",
                    authResult->type);
@@ -278,10 +278,7 @@ auto main(int argc, char const *const *const argv) -> int {
     return EXIT_FAILURE;
   }
 
-  crypto::RsaKeyPair ttpPublicKey;
-
   AppState state{};
-
   if (auto cert = crypto::X509Certificate::fromFile(crypto::TTP_CERT_PATH)) {
     state.ttpData.certificate = std::move(*cert);
     logzy::info("Loaded certificate with CN={}",
@@ -343,8 +340,7 @@ auto main(int argc, char const *const *const argv) -> int {
       case AppStage::Registered: {
 
         if (ImGui::Button("Request service")) {
-          estabilishSession(serverSocket, ttpSocket, state, ctx.rsaKey,
-                            ttpPublicKey);
+          estabilishSession(serverSocket, ttpSocket, state, ctx.rsaKey);
         }
 
       } break;

@@ -10,8 +10,6 @@ namespace network {
 enum class PacketType : std::int8_t {
   CertificateRequest,
   CertificateResponse,
-  RegisterRequest,
-  RegisterResponse,
   ServiceRequest,
   ServerAuthRequest,
   ServerAuthOk,
@@ -49,8 +47,6 @@ template <> struct std::formatter<network::PacketType> {
 
         {Type::CertificateRequest, "CertificateRequest"},
         {Type::CertificateResponse, "CertificateResponse"},
-        {Type::RegisterRequest, "RegisterRequest"},
-        {Type::RegisterResponse, "RegisterResponse"},
         {Type::ServiceRequest, "ServiceRequest"},
         {Type::ServerAuthRequest, "ServerAuthRequest"},
         {Type::ServerAuthOk, "ServerAuthOk"},
