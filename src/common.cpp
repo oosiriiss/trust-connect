@@ -20,7 +20,7 @@ auto SessionTicket::fromJson(const nlohmann::json &json)
   std::expected<SessionTicket, std::string> ticket{SessionTicket{}};
   logzy::debug("loading session ticket from json.");
 
-  const auto sessionId = json.value("session_in", std ::string_view{""});
+  const auto sessionId = json.value("session_id", std ::string_view{""});
   const auto clientCn = json.value("client_cn", std ::string_view{""});
   const auto serverCn = json.value("server_cn", std ::string_view{""});
   if (sessionId.empty()) {
@@ -76,8 +76,8 @@ registerWithTtp(network::TcpSocket &socket, const crypto::Hash32 &id,
   }
 
   std::string encryptedId;
-  if (auto res =
-          crypto::encryptAndEncode(crypto::hashToHex(id), ttpData.publicKey)) {
+  if (auto res = crypto::encryptAndEncode(crypto::hashToHex(id),
+                                          ttpData.publicKey)) {
     encryptedId = std::move(*res);
   } else {
     logzy::error("Couldn't encrypte id. {}", res.error());
