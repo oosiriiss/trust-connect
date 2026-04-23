@@ -157,7 +157,7 @@ auto main(int argc, const char *const *const argv) -> int {
       }
 
       if (received->type == network::PacketType::ServiceRequest) {
-        if (auto sessKey = protocol::establishSessionService(
+        if (auto sessKey = protocol::serverHandshake(
                 *clientSocket, ttpSocket, received->payload, ctx.id, serverKey,
                 ttpPublicKey, ctx.serverCertificate)) {
           sessionKey = std::move(*sessKey);

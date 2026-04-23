@@ -1,10 +1,16 @@
 #include "protocol.hpp"
 #include "crypto/aes.hpp"
 #include "crypto/crypto.hpp"
+#include "crypto/rsa.hpp"
 #include "crypto/x509.hpp"
 #include "logzy/logzy.hpp"
+#include "network/packet.hpp"
+#include "network/socket.hpp"
+#include <expected>
 
 namespace protocol {
+
+// auto TtpData::fromFile(std::string_view path);
 
 auto SessionTicket::toJson() -> nlohmann::json {
   return nlohmann::json{{"session_id", sessionId},
@@ -55,11 +61,11 @@ auto verifyAndParseSessionTicket(nlohmann::json &payload,
   return SessionTicket::fromJson(payload);
 }
 
-auto establishSessionClient(network::TcpSocket &serverSocket,
-                            network::TcpSocket &ttpSocket,
-                            crypto::X509Certificate &clientCert,
-                            const crypto::RsaKeyPair &clientKey,
-                            const crypto::RsaKeyPair &ttpKey)
+auto clientHandshake(network::TcpSocket &serverSocket,
+                     network::TcpSocket &ttpSocket,
+                     crypto::X509Certificate &clientCert,
+                     const crypto::RsaKeyPair &clientKey,
+                     const crypto::RsaKeyPair &ttpKey)
     -> std::expected<crypto::Aes256, std::string> {
 
   logzy::debug("Requesting service from server");
@@ -171,13 +177,13 @@ auto establishSessionClient(network::TcpSocket &serverSocket,
       std::format("Receiving from clietn failed. {}", authResult.error())};
 }
 
-auto establishSessionService(network::TcpSocket &clientSocket,
-                             network::TcpSocket &ttpSocket,
-                             const nlohmann::json &requestPayload,
-                             const crypto::Hash32 &serverID,
-                             const crypto::RsaKeyPair &serverKey,
-                             const crypto::RsaKeyPair &ttpKey,
-                             const crypto::X509Certificate &serverCertificate)
+auto serverHandshake(network::TcpSocket &clientSocket,
+                     network::TcpSocket &ttpSocket,
+                     const nlohmann::json &requestPayload,
+                     const crypto::Hash32 &serverID,
+                     const crypto::RsaKeyPair &serverKey,
+                     const crypto::RsaKeyPair &ttpKey,
+                     const crypto::X509Certificate &serverCertificate)
     -> std::expected<crypto::Aes256, std::string> {
   // Service request sent
 
@@ -260,9 +266,9 @@ auto establishSessionService(network::TcpSocket &clientSocket,
     return std::unexpected{std::format(
         "Couldn't decode and decrypt aes key. {}", keyString.error())};
 
-    //logzy::info("Session key: {}", sessionKey.getRawKey());
-    //logzy::info("Auth success. Received session data.");
-    //logzy::info("Encrypted 'test' = '{}'", *sessionKey.encrypt("test"));
+    // logzy::info("Session key: {}", sessionKey.getRawKey());
+    // logzy::info("Auth success. Received session data.");
+    // logzy::info("Encrypted 'test' = '{}'", *sessionKey.encrypt("test"));
 
     // SESSION KEY lalalallal blablablabla
   }
@@ -366,6 +372,221 @@ registerWithTtp(network::TcpSocket &socket, const crypto::Hash32 &id,
 
   return std::expected<crypto::X509Certificate, std::string>{
       std::move(receivedCert)};
+}
+
+auto handleRegister(crypto::X509Certificate &ttpCertificate,
+                    network::TcpSocket &client,
+                    const crypto::RsaKeyPair &ttpKey)
+    -> std::expected<ClientInfo, std::string> {
+
+  nlohmann::json payload;
+  if (auto packet = client.receive()) {
+    if (packet->type != network::PacketType::CertificateRequest) {
+      return std::unexpected(
+          std::format("Invalid register packet type. {}", packet->type));
+    }
+    payload = std::move(packet->payload);
+  } else {
+    return std::unexpected(
+        std::format("Couldn't receive from socket. {}", packet.error()));
+  }
+
+  logzy::trace("Received TradePublicKeysWithTtp packet from");
+
+  auto publicKeyPem = payload.value("public_key_pem", std::string_view{""});
+  std::string clientID = payload.value("id", "");
+
+  if (clientID.empty()) {
+    return std::unexpected(std::format("id is empty"));
+  }
+
+  if (auto res = crypto::decodeAndDecrypt(clientID, ttpKey)) {
+    clientID = std::move(*res);
+  } else {
+    return std::unexpected(
+        std::format("Couldn't decrypt user's id. {}", res.error()));
+  }
+
+  crypto::RsaKeyPair clientPublicKey;
+
+  if (auto res = crypto::RsaKeyPair::fromPublicPem(publicKeyPem)) {
+    clientPublicKey = std::move(*res);
+  } else {
+    return std::unexpected(
+        std::format("Couldn't parse client's public key pem. {}", res.error()));
+  }
+
+  crypto::X509Certificate userCert;
+  if (auto certRes = ttpCertificate.issue(clientPublicKey, clientID, ttpKey)) {
+    userCert = std::move(*certRes);
+  } else {
+    return std::unexpected(
+        std::format("Couldn't create user's certificate.{}", certRes.error()));
+  }
+  logzy::trace("Created user certificate for CN '{}'",
+               userCert.getCommonNameSafe());
+
+  logzy::trace("Sending client it's certificate");
+
+  std::string userCertPem;
+
+  if (auto res = userCert.toPem()) {
+    userCertPem = std::move(*res);
+  } else {
+    return std::unexpected(
+        std::format("Couldn't convert usercertificate to PEM"));
+  }
+
+  nlohmann::json responsePayload = {
+      {"certificate_pem", std::move(userCertPem)},
+  };
+
+  auto userCertCn = userCert.getCommonName();
+  if (!userCertCn) {
+    return std::unexpected(
+        std::format("Couldn't get common name from user's certificate. {}",
+                    userCertCn.error()));
+  }
+
+  // RESPONSE
+  if (auto err = client.send(
+          network::Packet{.type = network::PacketType::CertificateResponse,
+                          .payload = std::move(responsePayload)})) {
+    return std::unexpected(std::format("error while sending. {}", *err));
+  }
+
+  logzy::info("sent certificate.");
+
+  auto userPublicKey = userCert.getPublicKey();
+  if (!userPublicKey) {
+    return std::unexpected(std::format("couldn't get user's public key. {}",
+                                       userPublicKey.error()));
+  }
+
+  return std::expected<ClientInfo, std::string>{
+      ClientInfo{.commonName = std::move(*userCertCn),
+                 .publicCertificate = std::move(userCert),
+                 .publicKey = std::move(*userPublicKey)}};
+}
+
+auto finalizeHandshake(network::TcpSocket &clientSocket,
+                       network::TcpSocket &serverSocket,
+                       crypto::RsaKeyPair &clientPublicKey,
+                       crypto::RsaKeyPair &serverPublicKey) -> bool {
+
+  std::string sessionKey;
+  sessionKey.reserve(32);
+
+  if (auto bytes = crypto::openssl::generateRandomBytes<32>()) {
+    sessionKey.append(std::string_view{bytes->data.begin(), bytes->size()});
+  } else {
+    logzy::error("Couldn't generate session key. {}", bytes.error());
+  }
+
+  logzy::trace("Session key. {}", sessionKey);
+
+  std::string encryptedServerSessionKey;
+  std::string encryptedClientSessionKey;
+
+  if (auto encSessKey = crypto::encryptAndEncode(sessionKey, clientPublicKey)) {
+    encryptedClientSessionKey = std::move(*encSessKey);
+  } else {
+    logzy::error("Couldn't encrypt clients's session key. {}",
+                 encSessKey.error());
+    return false;
+  }
+
+  if (auto encSessKey = crypto::encryptAndEncode(sessionKey, serverPublicKey)) {
+    encryptedServerSessionKey = std::move(*encSessKey);
+  } else {
+    logzy::error("Couldn't encrypt server's session key. {}",
+                 encSessKey.error());
+    return false;
+  }
+
+  if (auto err = serverSocket.send(network::Packet{
+          .type = network::PacketType::UserAuthOk,
+          .payload = {
+              {"server_session_key", std::move(encryptedServerSessionKey)},
+          }})) {
+    logzy::error("Couldn't notify the server that user has "
+                 "authenticated with TTP. {}",
+                 *err);
+    return false;
+  }
+
+  if (auto err = clientSocket.send(network::Packet{
+          .type = network::PacketType::UserAuthOk,
+          .payload = {
+              {"client_session_key", std::move(encryptedClientSessionKey)},
+          }})) {
+    logzy::error("Couldn't notify the server that user has "
+                 "authenticated with TTP. {}",
+                 *err);
+    return false;
+  }
+  return true;
+}
+
+auto handleClientHandshake(crypto::X509Certificate &ttpCertificate,
+                           network::TcpSocket &clientSocket) -> bool {
+
+  nlohmann::json payload;
+  if (auto packet = clientSocket.receive()) {
+    if (packet->type != network::PacketType::UserAuthDataSubmit) {
+      logzy::error("Invalid register packet type. {}", packet->type);
+      return false;
+    }
+    payload = std::move(packet->payload);
+  } else {
+    logzy::error("Couldn't receive from socket. {}", packet.error());
+    return false;
+  }
+
+  std::string userCertPem = payload.value("user_cert_pem", "");
+  if (userCertPem.empty()) {
+    logzy::error("User didn't include crt pem.");
+    return false;
+  }
+
+  crypto::X509Certificate userCert;
+  if (auto res = crypto::X509Certificate::fromPem(userCertPem)) {
+    userCert = std::move(*res);
+  } else {
+    logzy::error("Couldn't read user's certificate from PEM", userCertPem,
+                 res.error());
+    return false;
+  }
+
+  crypto::RsaKeyPair userPublicKey;
+  if (auto res = userCert.getPublicKey()) {
+    userPublicKey = std::move(*res);
+  } else {
+    logzy::error("Coulnd't etarctpuiblic key. {}", res.error());
+    return false;
+  }
+
+  if (auto res = ttpCertificate.verify(userCert)) {
+    if (!res) {
+      logzy::error("Couldn't validate user's certificate!");
+      return false;
+    }
+    logzy::info("user's certificate verified");
+  } else {
+    logzy::error("Error occurred when validating user's certificate. {}",
+                 res.error());
+    return false;
+  }
+
+  std::string userCn;
+  if (auto res = userCert.getCommonName()) {
+    userCn = *res;
+  } else {
+    logzy::error("Coulnd't get serial number. {}", res.error());
+    return false;
+  }
+
+  return true;
 }
 
 } // namespace protocol

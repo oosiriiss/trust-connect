@@ -113,19 +113,6 @@ auto main(int argc, char const *const *const argv) -> int {
     ctx = std::move(*ctxOpt);
   }
 
-  if (auto publicKey = ctx.rsaKey.publicKeyPem()) {
-    logzy::info("Public key PEM:\n{}", *publicKey);
-  } else {
-    logzy::warn("Couldnt generate PEM for public key. {}", publicKey.error());
-  }
-
-  if (auto privateKey = ctx.rsaKey.privateKeyPem()) {
-    logzy::info("Private key PEM:\n{}", *privateKey);
-  } else {
-    logzy::warn("Couldnt generate PEM for privateKey key. {}",
-                privateKey.error());
-  }
-
   network::TcpSocket serverSocket;
   if (!protocol::connectTo(serverSocket, args->serverIp, args->serverPort,
                            "Server")) {
@@ -203,7 +190,7 @@ auto main(int argc, char const *const *const argv) -> int {
       case AppStage::Registered: {
 
         if (ImGui::Button("Request service")) {
-          if (auto sessionKey = protocol::establishSessionClient(
+          if (auto sessionKey = protocol::clientHandshake(
                   serverSocket, ttpSocket, state.clientCertificate, ctx.rsaKey,
                   state.ttpData.publicKey)) {
             state.sessionKey = std::move(*sessionKey);

@@ -5,6 +5,7 @@
 #include "crypto/rsa.hpp"
 #include "crypto/x509.hpp"
 #include "network/socket.hpp"
+#include "utility.hpp"
 #include <string>
 
 namespace protocol {
@@ -12,6 +13,9 @@ namespace protocol {
 struct TtpData {
   crypto::X509Certificate certificate;
   crypto::RsaKeyPair publicKey;
+
+  //[[nodiscard]] auto fromFile(std::string_view path)
+  //    -> std::expected<TtpData, std::string>;
 };
 
 struct SessionTicket {
@@ -39,17 +43,43 @@ registerWithTtp(network::TcpSocket &socket, const crypto::Hash32 &id,
                 const crypto::RsaKeyPair &clientKey, const TtpData &ttpData)
     -> std::expected<crypto::X509Certificate, std::string>;
 
-[[nodiscard]] auto establishSessionClient(network::TcpSocket &serverSocket,
-                                          network::TcpSocket &ttpSocket,
-                                          crypto::X509Certificate &clientCert,
-                                          const crypto::RsaKeyPair &clientKey,
-                                          const crypto::RsaKeyPair &ttpKey)
+[[nodiscard]] auto clientHandshake(network::TcpSocket &serverSocket,
+                                   network::TcpSocket &ttpSocket,
+                                   crypto::X509Certificate &clientCert,
+                                   const crypto::RsaKeyPair &clientKey,
+                                   const crypto::RsaKeyPair &ttpKey)
     -> std::expected<crypto::Aes256, std::string>;
 
-[[nodiscard]] auto establishSessionService(
+[[nodiscard]] auto serverHandshake(
     network::TcpSocket &clientSocket, network::TcpSocket &ttpSocket,
     const nlohmann::json &requestPayload, const crypto::Hash32 &serverID,
     const crypto::RsaKeyPair &serverKey, const crypto::RsaKeyPair &ttpKey,
     const crypto::X509Certificate &serverCertificate)
     -> std::expected<crypto::Aes256, std::string>;
+
+struct SessionAuthData {
+  // std::string requesterId;
+  // std::string serviceId;
+  crypto::RsaKeyPair servicePublicKey;
+  std::weak_ptr<network::TcpSocket> serviceSocket;
+};
+
+struct ClientInfo {
+  std::string commonName;
+  crypto::X509Certificate publicCertificate;
+  crypto::RsaKeyPair publicKey;
+};
+
+auto handleRegister(crypto::X509Certificate &ttpCertificate,
+                    network::TcpSocket &client,
+                    const crypto::RsaKeyPair &ttpKey)
+    -> std::expected<ClientInfo, std::string>;
+
+auto handleClientHandshake(crypto::X509Certificate &ttpCertificate,
+                           network::TcpSocket &clientSocket) -> bool;
+
+auto finalizeHandshake(network::TcpSocket &clientSocket,
+                       network::TcpSocket &serverSocket,
+                       crypto::RsaKeyPair &clientPublicKey,
+                       crypto::RsaKeyPair &serverPublicKey) -> bool;
 } // namespace protocol
