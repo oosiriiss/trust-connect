@@ -30,6 +30,8 @@ struct SessionTicket {
       -> std::expected<SessionTicket, std::string>;
 };
 
+enum class ClientRole : std::uint8_t { Requester = 0, Service = 1 };
+
 auto verifyAndParseSessionTicket(nlohmann::json &payload,
                                  const crypto::RsaKeyPair &ttpKey)
     -> std::expected<SessionTicket, std::string>;
@@ -38,9 +40,10 @@ auto verifyAndParseSessionTicket(nlohmann::json &payload,
                              const std::string &host, std::uint16_t port,
                              std::string_view targetName) -> bool;
 
-[[nodiscard]] auto
-registerWithTtp(network::TcpSocket &socket, const crypto::Hash32 &id,
-                const crypto::RsaKeyPair &clientKey, const TtpData &ttpData)
+[[nodiscard]] auto registerWithTtp(network::TcpSocket &socket,
+                                   const crypto::Hash32 &id,
+                                   const crypto::RsaKeyPair &clientKey,
+                                   const TtpData &ttpData, ClientRole role)
     -> std::expected<crypto::X509Certificate, std::string>;
 
 [[nodiscard]] auto clientHandshake(network::TcpSocket &serverSocket,
@@ -57,17 +60,11 @@ registerWithTtp(network::TcpSocket &socket, const crypto::Hash32 &id,
     const crypto::X509Certificate &serverCertificate)
     -> std::expected<crypto::Aes256, std::string>;
 
-struct SessionAuthData {
-  // std::string requesterId;
-  // std::string serviceId;
-  crypto::RsaKeyPair servicePublicKey;
-  std::weak_ptr<network::TcpSocket> serviceSocket;
-};
-
 struct ClientInfo {
   std::string commonName;
   crypto::X509Certificate publicCertificate;
   crypto::RsaKeyPair publicKey;
+  ClientRole role;
 };
 
 auto handleRegister(crypto::X509Certificate &ttpCertificate,

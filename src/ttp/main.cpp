@@ -1,10 +1,6 @@
 #include "common/cli.hpp"
 #include "common/protocol.hpp"
 #include "constants.hpp"
-#include "cppli/cppli.hpp"
-#include "cppli/vendor/debug_utils.hpp"
-#include "crypto/aes.hpp"
-#include "crypto/base64.hpp"
 #include "crypto/crypto.hpp"
 #include "crypto/hash.hpp"
 #include "crypto/openssl.hpp"
@@ -363,98 +359,65 @@ auto handleUserAuthDataSubmit(TtpState &state,
   return true;
 }
 
-auto handlePacket(TtpState &state, network::Packet &packet,
-                  std::shared_ptr<network::TcpSocket> &client,
-                  std::string_view clientName, const crypto::RsaKeyPair &ttpKey)
-    -> bool {
-
-  switch (packet.type) {
-  case network::PacketType::ServerAuthRequest:
-    return handleServerAuthRequest(state, client, packet, clientName, ttpKey);
-  case network::PacketType::CloseConnection:
-    return false;
-  case network::PacketType::UserAuthDataSubmit:
-    return handleUserAuthDataSubmit(state, client, packet, clientName, ttpKey);
-
-  default:
-    logzy::error("Invalid packet received: {}", packet.type);
-    return false;
-  }
-  return true;
-}
-
 void handleClientConnection(network::TcpSocket clientSocketRaw,
-                            std::string_view clientName, TtpState &state,
-                            const crypto::RsaKeyPair &ttpKey) {
+                            std::string_view clientName, TtpState &state) {
 
   auto clientSocket =
       std::make_shared<network::TcpSocket>(std::move(clientSocketRaw));
   logzy::trace("{} socket fd: {}", clientName, clientSocket->getFd());
 
   std::string commonName;
+  protocol::ClientRole role = protocol::ClientRole::Requester;
 
-  if (auto info = protocol::handleRegister(state.ttpCertificate,
-                                           *clientSocket.get(), ttpKey)) {
+  if (auto info = protocol::handleRegister(
+          state.ttpCertificate, *clientSocket.get(), state.ttpPrivateKey)) {
 
     ClientData data{.info = std::move(*info),
-                    .socket = std::weak_ptr{clientSocket}};
+                    .clientSocket = std::weak_ptr{clientSocket}};
     commonName = data.info.commonName;
-    state.loggedClients.emplace(data.info.commonName, std::move(data));
+    role = data.info.role;
+    state.connectedClients.emplace(data.info.commonName, std::move(data));
   } else {
     logzy::error("Couldn't register with ttp");
     return;
   }
 
-  while (true) {
-    auto res = clientSocket->receive();
-    if (!res) {
-      logzy::error("Couldn't receive from client. {}", res.error());
-      break;
-    }
+  if (role == protocol::ClientRole::Requester) {
+    if (protocol::authenticateClient(state.ttpCertificate,
+                                     *clientSocket.get())) {
 
-    if (res->type == network::PacketType::CloseConnection) {
-      break;
-    }
-    if (res->type == network::PacketType::UserAuthDataSubmit) {
-      if (protocol::handleClientHandshake(state.ttpCertificate,
-                                          *clientSocket.get())) {
+      logzy::trace("Getting client ot finalize");
+      ClientData &clientData = state.connectedClients.at(commonName);
 
-        logzy::trace("Getting client ot finalize");
-        ClientData &clientData = state.loggedClients.at(commonName);
+      logzy::trace("Getting server for client ot finalize");
+      PendingSession &serverData = state.pendingSessions.at(commonName);
 
-        logzy::trace("Getting server for client ot finalize");
-        SessionAuthData &serverData = state.pendingSessions.at(commonName);
-
-        if (protocol::finalizeHandshake(*clientData.socket.lock().get(),
-                                        *serverData.serviceSocket.lock().get(),
-                                        clientData.info.publicKey,
-                                        serverData.servicePublicKey)) {
-          logzy::info("Handshake done.");
-          return;
-        }
-        logzy::error("Couldn't finalize handshake.");
+      if (protocol::finalizeHandshake(*clientData.clientSocket.lock().get(),
+                                      *serverData.serviceSocket.lock().get(),
+                                      clientData.info.publicKey,
+                                      serverData.servicePublicKey)) {
+        logzy::info("Handshake done.");
         return;
       }
-    } else if (res->type == network::PacketType::ServerAuthRequest) {
-
-      handleServerAuthRequest(state, clientSocket, *res, clientName, ttpKey);
+      logzy::error("Couldn't finalize handshake.");
+      return;
     }
-
-    logzy::info("Received packet with type: {}", res->type);
-    logzy::trace("Payload:\n{}", res->payload.dump());
-
-    auto result = handlePacket(state, *res, clientSocket, clientName, ttpKey);
-    if (res->type == network::PacketType::UserAuthDataSubmit && result) {
-      logzy::info("TTP's role is finished. cleaning up");
-      break;
+  } else {
+    while (true) {
+      auto res = clientSocket->receive();
+      if (!res) {
+        logzy::error("Couldn't receive from client. {}", res.error());
+        break;
+      }
+      handleServerAuthRequest(state, clientSocket, *res, clientName);
     }
-
-    logzy::debug("Handled.");
   }
+
   logzy::trace("Connection with {} ended", clientName);
   logzy::trace("state.pendingSessions.size() = {}",
                state.pendingSessions.size());
-  logzy::trace("state.loggedClients.size() = {}", state.loggedClients.size());
+  logzy::trace("state.loggedClients.size() = {}",
+               state.connectedClients.size());
 }
 
 } // namespace

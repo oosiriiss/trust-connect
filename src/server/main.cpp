@@ -120,8 +120,9 @@ auto main(int argc, const char *const *const argv) -> int {
 
   crypto::RsaKeyPair ttpPublicKey;
 
-  if (auto cert = protocol::registerWithTtp(ttpSocket, ctx.id, serverKey,
-                                            ctx.ttpData)) {
+  if (auto cert =
+          protocol::registerWithTtp(ttpSocket, ctx.id, serverKey, ctx.ttpData,
+                                    protocol::ClientRole::Service)) {
     ctx.serverCertificate = std::move(*cert);
   } else {
     logzy::error("Couldn't obtian certificate.");

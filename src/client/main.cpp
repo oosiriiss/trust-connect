@@ -175,8 +175,9 @@ auto main(int argc, char const *const *const argv) -> int {
         }
         logzy::trace("Beggining registering with TTP");
 
-        if (auto cert = protocol::registerWithTtp(ttpSocket, state.id,
-                                                  ctx.rsaKey, state.ttpData)) {
+        if (auto cert = protocol::registerWithTtp(
+                ttpSocket, state.id, ctx.rsaKey, state.ttpData,
+                protocol::ClientRole::Requester)) {
           state.clientCertificate = std::move(*cert);
           state.stage = AppStage::Registered;
         } else {

@@ -7,6 +7,7 @@
 #include "network/packet.hpp"
 #include "network/socket.hpp"
 #include <expected>
+#include <utility>
 
 namespace protocol {
 
@@ -298,9 +299,10 @@ auto serverHandshake(network::TcpSocket &clientSocket,
   return true;
 }
 
-[[nodiscard]] auto
-registerWithTtp(network::TcpSocket &socket, const crypto::Hash32 &id,
-                const crypto::RsaKeyPair &clientKey, const TtpData &ttpData)
+[[nodiscard]] auto registerWithTtp(network::TcpSocket &socket,
+                                   const crypto::Hash32 &id,
+                                   const crypto::RsaKeyPair &clientKey,
+                                   const TtpData &ttpData, ClientRole role)
     -> std::expected<crypto::X509Certificate, std::string> {
 
   std::string publicKeyPem;
@@ -323,6 +325,7 @@ registerWithTtp(network::TcpSocket &socket, const crypto::Hash32 &id,
   nlohmann::json payload = {
       {"id", encryptedId},
       {"public_key_pem", std::move(publicKeyPem)},
+      {"role", std::to_underlying(role)},
   };
 
   logzy::info("Registering with TTP");
@@ -394,6 +397,7 @@ auto handleRegister(crypto::X509Certificate &ttpCertificate,
   logzy::trace("Received TradePublicKeysWithTtp packet from");
 
   auto publicKeyPem = payload.value("public_key_pem", std::string_view{""});
+  auto roleRaw = payload.value("role", -1);
   std::string clientID = payload.value("id", "");
 
   if (clientID.empty()) {
@@ -405,6 +409,17 @@ auto handleRegister(crypto::X509Certificate &ttpCertificate,
   } else {
     return std::unexpected(
         std::format("Couldn't decrypt user's id. {}", res.error()));
+  }
+
+  ClientRole role = ClientRole::Requester;
+  if (roleRaw == -1) {
+    logzy::warn("Role is empty. defaulting to ClientRole::Requester");
+  } else {
+    if (roleRaw != std::to_underlying(ClientRole::Requester) &&
+        roleRaw != std::to_underlying(ClientRole::Service)) {
+      return std::unexpected(std::format("Invalid role. {}", roleRaw));
+    }
+    role = static_cast<ClientRole>(roleRaw);
   }
 
   crypto::RsaKeyPair clientPublicKey;
@@ -466,7 +481,8 @@ auto handleRegister(crypto::X509Certificate &ttpCertificate,
   return std::expected<ClientInfo, std::string>{
       ClientInfo{.commonName = std::move(*userCertCn),
                  .publicCertificate = std::move(userCert),
-                 .publicKey = std::move(*userPublicKey)}};
+                 .publicKey = std::move(*userPublicKey),
+                 .role = role}};
 }
 
 auto finalizeHandshake(network::TcpSocket &clientSocket,
@@ -558,14 +574,6 @@ auto handleClientHandshake(crypto::X509Certificate &ttpCertificate,
     return false;
   }
 
-  crypto::RsaKeyPair userPublicKey;
-  if (auto res = userCert.getPublicKey()) {
-    userPublicKey = std::move(*res);
-  } else {
-    logzy::error("Coulnd't etarctpuiblic key. {}", res.error());
-    return false;
-  }
-
   if (auto res = ttpCertificate.verify(userCert)) {
     if (!res) {
       logzy::error("Couldn't validate user's certificate!");
@@ -575,14 +583,6 @@ auto handleClientHandshake(crypto::X509Certificate &ttpCertificate,
   } else {
     logzy::error("Error occurred when validating user's certificate. {}",
                  res.error());
-    return false;
-  }
-
-  std::string userCn;
-  if (auto res = userCert.getCommonName()) {
-    userCn = *res;
-  } else {
-    logzy::error("Coulnd't get serial number. {}", res.error());
     return false;
   }
 
