@@ -38,9 +38,10 @@ add_library(
 
    src/network/socket.hpp
    src/network/socket.cpp
-
    src/network/packet.hpp
    src/network/packet.cpp
+   src/network/network.hpp
+   src/network/network.cpp
 
    src/crypto/crypto.hpp
    src/crypto/crypto.cpp

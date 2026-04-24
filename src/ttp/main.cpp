@@ -22,6 +22,10 @@ struct ClientData {
   protocol::ClientInfo info;
   std::weak_ptr<network::TcpSocket> clientSocket;
 };
+struct PendingSession {
+  protocol::SessionInfo info;
+  std::weak_ptr<network::TcpSocket> serviceSocket;
+};
 
 struct TtpState {
   crypto::X509Certificate ttpCertificate;
@@ -31,8 +35,8 @@ struct TtpState {
                      TransparentStringCompare>
       connectedClients;
 
-  std::unordered_map<std::string, protocol::PendingSession,
-                     TransparentStringHash, TransparentStringCompare>
+  std::unordered_map<std::string, PendingSession, TransparentStringHash,
+                     TransparentStringCompare>
       pendingSessions;
 
   std::mutex mutex;
@@ -61,49 +65,48 @@ void handleClientConnection(network::TcpSocket clientSocketRaw,
   }
 
   if (role == protocol::ClientRole::Requester) {
-    if (protocol::authenticateClient(state.ttpCertificate,
-                                     *clientSocket.get())) {
+    if (auto err = protocol::authenticateClient(state.ttpCertificate,
+                                                *clientSocket.get())) {
+      logzy::critical("Couldn't authenticate client. {}", *err);
+    }
 
-      logzy::trace("Getting client ot finalize");
-      ClientData &clientData = state.connectedClients.at(commonName);
+    logzy::trace("Getting client ot finalize");
+    ClientData &clientData = state.connectedClients.at(commonName);
 
-      logzy::trace("Getting server for client ot finalize");
-      protocol::PendingSession &serverData =
-          state.pendingSessions.at(commonName);
+    logzy::trace("Getting server for client ot finalize");
+    PendingSession &serverData = state.pendingSessions.at(commonName);
 
-      auto serverPublicKey = serverData.serviceCertificate.getPublicKey();
-      if (!serverPublicKey) {
-        logzy::error("Couldn't extarct public key from cert. {}",
-                     serverPublicKey.error());
-        return;
-      }
-
-      auto clientPublicKey = clientData.info.publicCertificate.getPublicKey();
-      if (!clientPublicKey) {
-        logzy::error("Couldn't extarct public key from cert. {}",
-                     clientPublicKey.error());
-        return;
-      }
-
-      if (protocol::finalizeHandshake(*clientData.clientSocket.lock().get(),
-                                      *serverData.serviceSocket.lock().get(),
-                                      *clientPublicKey, *serverPublicKey)) {
-        logzy::info("Handshake done.");
-        return;
-      }
-      logzy::error("Couldn't finalize handshake.");
+    auto serverPublicKey = serverData.info.serviceCertificate.getPublicKey();
+    if (!serverPublicKey) {
+      logzy::error("Couldn't extarct public key from cert. {}",
+                   serverPublicKey.error());
       return;
     }
+
+    auto clientPublicKey = clientData.info.publicCertificate.getPublicKey();
+    if (!clientPublicKey) {
+      logzy::error("Couldn't extarct public key from cert. {}",
+                   clientPublicKey.error());
+      return;
+    }
+
+    if (auto err =
+            protocol::finalizeHandshake(*clientData.clientSocket.lock().get(),
+                                        *serverData.serviceSocket.lock().get(),
+                                        *clientPublicKey, *serverPublicKey)) {
+      logzy::critical("Couldn't finalize handshake. {}", *err);
+    }
+    logzy::info("Handshake done.");
   } else {
     while (true) {
-      auto pendingSession = protocol::authenticateService(
-          state.ttpCertificate, clientSocket, clientName);
-      if (!pendingSession) {
-        logzy::error("err. {}", pendingSession.error());
+      auto sessionInfo = protocol::authenticateService(state.ttpCertificate,
+                                                       *clientSocket.get());
+      if (!sessionInfo) {
+        logzy::error("err. {}", sessionInfo.error());
         return;
       }
 
-      auto clientCn = pendingSession->clientCertificate.getCommonName();
+      auto clientCn = sessionInfo->clientCertificate.getCommonName();
 
       if (!clientCn) {
         logzy::error("no cn. {}", clientCn.error());
@@ -112,7 +115,10 @@ void handleClientConnection(network::TcpSocket clientSocketRaw,
       {
         std::lock_guard lock{state.mutex};
 
-        state.pendingSessions.emplace(*clientCn, std::move(*pendingSession));
+        PendingSession sess{.info = std::move(sessionInfo).value(),
+                            .serviceSocket = std::weak_ptr{clientSocket}};
+
+        state.pendingSessions.emplace(*clientCn, std::move(sess));
       }
 
       auto userSocket = state.connectedClients.find(*clientCn);
@@ -122,10 +128,9 @@ void handleClientConnection(network::TcpSocket clientSocketRaw,
       }
 
       if (auto sock = userSocket->second.clientSocket.lock()) {
-        if (auto err = protocol::notifyUser(*sock.get(), state.ttpPrivateKey,
-                                            *clientCn, commonName)) {
+        if (auto err = protocol::notifyClient(*sock.get(), state.ttpPrivateKey,
+                                              *clientCn, commonName)) {
           logzy::error("cdnt notfiy client. {}", *err);
-          return;
         }
       }
     }
