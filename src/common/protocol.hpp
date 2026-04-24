@@ -63,8 +63,13 @@ auto verifyAndParseSessionTicket(nlohmann::json &payload,
 struct ClientInfo {
   std::string commonName;
   crypto::X509Certificate publicCertificate;
-  crypto::RsaKeyPair publicKey;
   ClientRole role;
+};
+
+struct PendingSession {
+  std::weak_ptr<network::TcpSocket> serviceSocket;
+  crypto::X509Certificate serviceCertificate;
+  crypto::X509Certificate clientCertificate;
 };
 
 auto handleRegister(crypto::X509Certificate &ttpCertificate,
@@ -72,11 +77,23 @@ auto handleRegister(crypto::X509Certificate &ttpCertificate,
                     const crypto::RsaKeyPair &ttpKey)
     -> std::expected<ClientInfo, std::string>;
 
-auto handleClientHandshake(crypto::X509Certificate &ttpCertificate,
-                           network::TcpSocket &clientSocket) -> bool;
+auto authenticateClient(crypto::X509Certificate &ttpCertificate,
+                        network::TcpSocket &clientSocket) -> bool;
 
 auto finalizeHandshake(network::TcpSocket &clientSocket,
                        network::TcpSocket &serverSocket,
                        crypto::RsaKeyPair &clientPublicKey,
                        crypto::RsaKeyPair &serverPublicKey) -> bool;
+
+auto authenticateService(
+    const crypto::X509Certificate &ttpCertificate,
+    const std::shared_ptr<network::TcpSocket> &serverSocket,
+    std::string_view clientName) -> std::expected<PendingSession, std::string>;
+
+auto notifyUser(network::TcpSocket &clientSocket,
+                const crypto::RsaKeyPair &ttpPrivateKey,
+                std::string_view clientCommonName,
+                std::string_view serverCommonName)
+    -> std::optional<std::string>;
+
 } // namespace protocol
