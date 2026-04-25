@@ -144,6 +144,16 @@ auto main(int argc, char const *const *const argv) -> int {
 
   logzy::info("Loaded ttp key");
 
+  auto falseCertificate = crypto::X509Certificate::createSelfSignedCA(
+      "False certificate", ctx.rsaKey);
+  if (!falseCertificate) {
+    logzy::critical("Couldnt generate false certificate");
+    return EXIT_FAILURE;
+  }
+
+  bool useFakeCertificate = false;
+  crypto::X509Certificate *activeCertificate = &state.clientCertificate;
+
   while (glfwWindowShouldClose(ctx.window) == 0) {
     if (!beginFrame(ctx)) {
       continue;
@@ -189,18 +199,27 @@ auto main(int argc, char const *const *const argv) -> int {
       } break;
 
       case AppStage::Registered: {
+        ImGui::Checkbox("Use false certificate", &useFakeCertificate);
+
+        crypto::X509Certificate *activeCertificate =
+            (useFakeCertificate) ? &falseCertificate.value()
+                                 : &state.clientCertificate;
 
         if (ImGui::Button("Request service")) {
           if (auto sessionKey = protocol::clientHandshake(
-                  serverSocket, ttpSocket, state.clientCertificate, ctx.rsaKey,
+                  serverSocket, ttpSocket, *activeCertificate, ctx.rsaKey,
                   state.ttpData.publicKey)) {
             state.sessionKey = std::move(*sessionKey);
             state.stage = AppStage::Authenticated;
             logzy::info("Session key obtained.");
           } else {
             logzy::error("{}", sessionKey.error());
+            state.errorMessage =
+                std::format("Authentication failed. {}", sessionKey.error());
           }
         }
+        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s",
+                           state.errorMessage.c_str());
 
       } break;
       case AppStage::Authenticated: {

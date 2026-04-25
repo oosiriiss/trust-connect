@@ -88,7 +88,7 @@ void handleClientConnection(network::TcpSocket clientSocketRaw,
     role = data.info.role;
     state.connectedClients.emplace(data.info.commonName, std::move(data));
   } else {
-    logzy::error("Couldn't register with ttp");
+    logzy::error("Registering {} failed. {}", clientName, info.error());
     return;
   }
 

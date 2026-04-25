@@ -15,12 +15,14 @@ enum class ServerOption : std::uint_fast8_t {
   TtpIp,
   TtpPort,
   Help,
+  FalsifyCertificate,
 };
 
 struct ServerArguments {
   std::uint16_t bindPort{network::DEFAULT_SERVER_PORT};
   std::string ttpIp{network::DEFAULT_TTP_IP};
   std::uint16_t ttpPort{network::DEFAULT_TTP_PORT};
+  bool falsifyCertificate{false};
 
   [[nodiscard]] static constexpr auto options()
       -> cppli::OptionContainer<ServerOption> {
@@ -52,6 +54,14 @@ struct ServerArguments {
                                     .secondName = "--help",
                                     .description = "Displays the help message",
                                     .needsValue = false});
+    options.addOption(
+        ServerOption::FalsifyCertificate,
+        cppli::Option{.firstName = "-f",
+                      .secondName = "--falsify-certificate",
+                      .description =
+                          "Makes the server use it's own certificate that is "
+                          "not issued by the TTP.",
+                      .needsValue = false});
 
     return options;
   }
@@ -66,6 +76,9 @@ struct ServerArguments {
     if (result.options.contains(ServerOption::Help)) {
       std::println("{}", cppli::createHelp(options(), "ttp-server"));
       return std::unexpected{EXIT_SUCCESS};
+    }
+    if (result.options.contains(ServerOption::FalsifyCertificate)) {
+      args->falsifyCertificate = true;
     }
 
     if (auto port = result.options.find(ServerOption::BindPort);

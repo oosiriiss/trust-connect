@@ -187,6 +187,7 @@ auto clientHandshake(network::TcpSocket &serverSocket,
   auto payload = waitForDataOrError(ttpSocket, serverSocket,
                                     network::PacketType::ServerAuthOk);
   if (!payload) {
+    // waitForDataOrError logs error msg
     return std::unexpected(std::move(payload).error());
   }
 
@@ -273,20 +274,16 @@ auto serverHandshake(network::TcpSocket &ttpSocket,
   return receiveSessionKey(ttpSocket, serverKey);
 }
 
-[[nodiscard]] auto connectTo(network::TcpSocket &socket,
-                             const std::string &host, std::uint16_t port,
-                             std::string_view targetName) -> bool {
+auto connectTo(network::TcpSocket &socket, const std::string &host,
+               std::uint16_t port, std::string_view targetName) -> bool {
 
   logzy::info("Connecting to {} at {}:{}", targetName, host, port);
 
   auto socketRes = network::TcpSocket::connect(host, port);
   if (!socketRes) {
-
     logzy::error("Couldn't connect to {}. Reason: {}", targetName,
                  socketRes.error());
-    // As of now failure in connection is just
-    // ommited, and is not considered and error
-    return true;
+    return false;
   }
 
   logzy::info("successfully connected to: {}", targetName);

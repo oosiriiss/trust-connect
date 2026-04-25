@@ -69,6 +69,63 @@ void handleDataRequest(network::TcpSocket &clientSocket,
   logzy::info("Data request handled.");
 }
 
+auto registerAndGetCertificate(network::TcpSocket &ttpSocket, AppContext &ctx,
+                               bool falsifyCertificate) -> bool {
+
+  if (auto cert = protocol::registerWithTtp(ttpSocket, ctx.id, ctx.serverKey,
+                                            ctx.ttpData,
+                                            protocol::ClientRole::Service)) {
+    ctx.serverCertificate = std::move(*cert);
+  } else {
+    logzy::error("Couldn't obtian certificate.");
+    if (!falsifyCertificate) {
+      return false;
+    }
+    logzy::info("False certificate is enabled. Trying to recover by creating "
+                "self-signed fake certificate.");
+  }
+
+  if (!falsifyCertificate) {
+    return true;
+  }
+
+  logzy::info("Overwriting ttp's certificate with own forged certificate.");
+  if (auto cert = crypto::X509Certificate::createSelfSignedCA(
+          "Server's fake certificate", ctx.serverKey)) {
+    ctx.serverCertificate = std::move(cert).value();
+  } else {
+    logzy::critical(
+        "There was an  error when generating server's fake certificate. {}",
+        cert.error());
+    return false;
+  }
+
+  return true;
+}
+
+void clientSession(network::TcpSocket &clientSocket,
+                   crypto::Aes256 &sessionKey) {
+
+  while (true) {
+    auto packet = clientSocket.receive();
+    if (!packet) {
+      logzy::error("Couldn't receive. {}", packet.error());
+      break;
+    }
+
+    if (packet->type == network::PacketType::CloseConnection) {
+      break;
+    }
+
+    if (packet->type != network::PacketType::DataRequest) {
+      logzy::error("Wrong packet received. {}", packet->type);
+      continue;
+    }
+
+    handleDataRequest(clientSocket, packet->payload, sessionKey);
+  }
+}
+
 } // namespace
 
 auto main(int argc, const char *const *const argv) -> int {
@@ -127,14 +184,7 @@ auto main(int argc, const char *const *const argv) -> int {
     return EXIT_FAILURE;
   }
 
-  crypto::RsaKeyPair ttpPublicKey;
-
-  if (auto cert =
-          protocol::registerWithTtp(ttpSocket, ctx.id, serverKey, ctx.ttpData,
-                                    protocol::ClientRole::Service)) {
-    ctx.serverCertificate = std::move(*cert);
-  } else {
-    logzy::error("Couldn't obtian certificate.");
+  if (!registerAndGetCertificate(ttpSocket, ctx, args->falsifyCertificate)) {
     return EXIT_FAILURE;
   }
 
@@ -153,36 +203,23 @@ auto main(int argc, const char *const *const argv) -> int {
   crypto::Aes256 sessionKey;
 
   while (true) {
-    if (!clientSocket) {
-      logzy::error("Accepting client failed: {}", clientSocket.error());
+
+    auto payload = clientSocket->receive();
+    if (!payload) {
+      logzy::error("Couldn't ceveive. {}", payload.error());
+    }
+
+    if (auto sessKey =
+            protocol::serverHandshake(ttpSocket, payload->payload,
+                                      ctx.serverKey, ctx.serverCertificate)) {
+      sessionKey = std::move(sessKey).value();
+    } else {
+      network::sendError(*clientSocket, "Server authentication failed");
+      logzy::error("Couldn't estaiblsih connection. {}", sessKey.error());
       continue;
     }
-    logzy::info("Client connected!");
 
-    if (auto received = clientSocket->receive()) {
-      logzy::info("Received: {}", *received);
-
-      if (received->type == network::PacketType::CloseConnection) {
-        break;
-      }
-
-      if (received->type == network::PacketType::ServiceRequest) {
-        if (auto sessKey = protocol::serverHandshake(
-                *clientSocket, ttpSocket, received->payload, ctx.id, serverKey,
-                ttpPublicKey, ctx.serverCertificate)) {
-          sessionKey = std::move(*sessKey);
-        } else {
-          logzy::error("Couldn't estaiblsih connection. {}", sessKey.error());
-        }
-      }
-      if (received->type == network::PacketType::DataRequest) {
-        handleDataRequest(*clientSocket, received->payload, sessionKey);
-      }
-
-    } else {
-      logzy::error("Couldn't receive message from client: {}",
-                   received.error());
-    }
+    clientSession(*clientSocket, sessionKey);
   }
 
   return EXIT_SUCCESS;
