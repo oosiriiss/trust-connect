@@ -22,6 +22,7 @@ namespace {
 struct AppContext {
   crypto::Hash32 id{};
   crypto::X509Certificate serverCertificate;
+  crypto::RsaKeyPair serverKey;
   protocol::TtpData ttpData;
 };
 
@@ -95,9 +96,16 @@ auto main(int argc, const char *const *const argv) -> int {
     return EXIT_FAILURE;
   }
 
-  crypto::RsaKeyPair serverKey;
+  if (auto cert = crypto::X509Certificate::fromFile(crypto::TTP_CERT_PATH)) {
+    ctx.ttpData.certificate = std::move(*cert);
+    logzy::info("Loaded certificate with CN={}",
+                ctx.ttpData.certificate.getCommonNameSafe());
+  } else {
+    logzy::critical("Couldn't load ttp certifiacte. {}", cert.error());
+  }
+
   if (auto keyResult = crypto::RsaKeyPair::generate()) {
-    serverKey = std::move(*keyResult);
+    ctx.serverKey = std::move(*keyResult);
   } else {
     logzy::critical("Couldn't generate servers RSA key pair");
     return EXIT_FAILURE;

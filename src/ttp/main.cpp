@@ -43,6 +43,33 @@ struct TtpState {
   std::mutex mutex;
 };
 
+void failClientsideAuth(network::TcpSocket &clientSocket, TtpState &state,
+                        std::string_view clientCommonName,
+                        std::string_view errorMsg,
+                        std::string_view errorDetails) {
+  logzy::error("{}. {}", errorMsg, errorDetails);
+
+  network::sendError(clientSocket, errorMsg);
+  logzy::debug("Client notified of error.");
+
+  auto serverSockPtr = state.pendingSessions.find(clientCommonName);
+  if (serverSockPtr == state.pendingSessions.end()) {
+    logzy::error("No server connected with client '{}' found.",
+                 clientCommonName);
+    return;
+  }
+
+  if (auto sock = serverSockPtr->second.serviceSocket.lock()) {
+    network::sendError(*sock.get(), errorMsg);
+  }
+
+  logzy::debug("Notified the server.");
+}
+
+void failServersideAuth(network::TcpSocket &serverSocket,
+                        std::string_view errorMsg,
+                        std::string_view errorDetails) {}
+
 void handleClientConnection(network::TcpSocket clientSocketRaw,
                             std::string_view clientName, TtpState &state) {
   auto clientSocket =
@@ -68,7 +95,9 @@ void handleClientConnection(network::TcpSocket clientSocketRaw,
   if (role == protocol::ClientRole::Requester) {
     if (auto err = protocol::authenticateClient(state.ttpCertificate,
                                                 *clientSocket.get())) {
-      logzy::critical("Couldn't authenticate client. {}", *err);
+      failClientsideAuth(*clientSocket.get(), state, commonName,
+                         "Could not authenticate client.", *err);
+      return;
     }
 
     logzy::trace("Getting client ot finalize");
@@ -79,15 +108,17 @@ void handleClientConnection(network::TcpSocket clientSocketRaw,
 
     auto serverPublicKey = serverData.info.serviceCertificate.getPublicKey();
     if (!serverPublicKey) {
-      logzy::error("Couldn't extarct public key from cert. {}",
-                   serverPublicKey.error());
+      failClientsideAuth(*clientSocket.get(), state, commonName,
+                         "Couldn't parse server's certificate.",
+                         serverPublicKey.error());
       return;
     }
 
     auto clientPublicKey = clientData.info.publicCertificate.getPublicKey();
     if (!clientPublicKey) {
-      logzy::error("Couldn't extarct public key from cert. {}",
-                   clientPublicKey.error());
+      failClientsideAuth(*clientSocket.get(), state, commonName,
+                         "Couldn't parse client's certificate.",
+                         clientPublicKey.error());
       return;
     }
 
@@ -95,7 +126,10 @@ void handleClientConnection(network::TcpSocket clientSocketRaw,
             protocol::finalizeHandshake(*clientData.clientSocket.lock().get(),
                                         *serverData.serviceSocket.lock().get(),
                                         *clientPublicKey, *serverPublicKey)) {
-      logzy::critical("Couldn't finalize handshake. {}", *err);
+
+      failClientsideAuth(*clientSocket.get(), state, commonName,
+                         "Couldn't finalize handshake.", *err);
+      return;
     }
     logzy::info("Handshake done.");
   } else {
@@ -108,16 +142,22 @@ void handleClientConnection(network::TcpSocket clientSocketRaw,
       auto sessionInfo = protocol::authenticateService(state.ttpCertificate,
                                                        *clientSocket.get());
       if (!sessionInfo) {
-        logzy::error("err. {}", sessionInfo.error());
-        return;
+        network::sendError(*clientSocket.get(),
+                           "Could not authenticate server");
+        logzy::error("Authentcation of server failed. {}", sessionInfo.error());
+        continue;
       }
 
       auto clientCn = sessionInfo->clientCertificate.getCommonName();
 
       if (!clientCn) {
-        logzy::error("no cn. {}", clientCn.error());
-        return;
+        network::sendError(*clientSocket.get(),
+                           "Could not create session - extraction of common "
+                           "name from client's certificate failed");
+        logzy::error("No common name in client. {}", clientCn.error());
+        continue;
       }
+
       {
         std::lock_guard lock{state.mutex};
 
@@ -129,14 +169,18 @@ void handleClientConnection(network::TcpSocket clientSocketRaw,
 
       auto userSocket = state.connectedClients.find(*clientCn);
       if (userSocket == state.connectedClients.end()) {
-        logzy::error("no client. ");
-        return;
+        network::sendError(*clientSocket.get(),
+                           "Client is not connected to TTP");
+        logzy::error("Client not connected to ttp.");
+        continue;
       }
 
       if (auto sock = userSocket->second.clientSocket.lock()) {
         if (auto err = protocol::notifyClient(*sock.get(), state.ttpPrivateKey,
                                               *clientCn, commonName)) {
-          logzy::error("cdnt notfiy client. {}", *err);
+          network::sendError(*clientSocket.get(), "Couldn't notify client");
+          logzy::error("Couldn't notify client");
+          continue;
         }
       }
     }

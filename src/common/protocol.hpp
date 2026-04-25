@@ -67,11 +67,11 @@ auto verifyAndParseSessionTicket(nlohmann::json &payload,
                                    const crypto::RsaKeyPair &ttpKey)
     -> std::expected<crypto::Aes256, std::string>;
 
-[[nodiscard]] auto serverHandshake(
-    network::TcpSocket &clientSocket, network::TcpSocket &ttpSocket,
-    const nlohmann::json &requestPayload, const crypto::Hash32 &serverID,
-    const crypto::RsaKeyPair &serverKey, const crypto::RsaKeyPair &ttpKey,
-    const crypto::X509Certificate &serverCertificate)
+[[nodiscard]] auto
+serverHandshake(network::TcpSocket &ttpSocket,
+                const nlohmann::json &requestPayload,
+                const crypto::RsaKeyPair &serverKey,
+                const crypto::X509Certificate &serverCertificate)
     -> std::expected<crypto::Aes256, std::string>;
 
 struct ClientInfo {

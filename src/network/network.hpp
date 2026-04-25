@@ -6,6 +6,10 @@
 #include <expected>
 namespace network {
 
+namespace keys {
+constexpr std::string_view ErrorMessage = "error_message";
+}
+
 [[nodiscard]] auto expectPacket(TcpSocket &socket, PacketType expectedType)
     -> std::expected<nlohmann::json, std::string>;
 

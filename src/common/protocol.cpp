@@ -3,12 +3,15 @@
 #include "crypto/crypto.hpp"
 #include "crypto/rsa.hpp"
 #include "crypto/x509.hpp"
+#include "debug_utils.hpp"
 #include "logzy/logzy.hpp"
 #include "network/network.hpp"
 #include "network/packet.hpp"
 #include "network/socket.hpp"
 #include <expected>
 #include <optional>
+#include <poll.h>
+#include <sys/poll.h>
 #include <utility>
 
 namespace protocol {
@@ -104,6 +107,51 @@ auto verifyAndParseSessionTicket(nlohmann::json &payload,
   return SessionTicket::fromJson(payload);
 }
 
+static auto waitForDataOrError(network::TcpSocket &ttpSocket,
+                               network::TcpSocket &serverSocket,
+                               network::PacketType packetType)
+    -> std::expected<nlohmann::json, std::string> {
+
+  std::array<pollfd, 2> fds{};
+
+  fds[0].fd = ttpSocket.getFd();
+  fds[0].events = POLLIN;
+
+  fds[1].fd = serverSocket.getFd();
+  fds[1].events = POLLIN;
+  logzy::debug("Waiting for data from server or ttp.");
+  int res = poll(fds.data(), 2, -1);
+
+  if (res < 0) {
+    return std::unexpected("Polling server socket and ttp socket failed.");
+  }
+
+  const bool ttpHasData = (fds[0].revents & POLLIN) > 0;
+  const bool serverHasData = (fds[1].revents & POLLIN) > 0;
+
+  if (ttpHasData) {
+    logzy::debug("TTP has data.");
+    return network::expectPacket(ttpSocket, packetType);
+  }
+
+  DEBUG_ASSERT(serverHasData);
+  logzy::debug("Server sent an error message");
+
+  // Server forwards errors from ttp, as ttp may not have direct access to
+  // client
+
+  auto errorMessage =
+      network::expectPacket(serverSocket, network::PacketType::ErrorMessage);
+  if (errorMessage) {
+    return std::unexpected(
+        std::format("Error during server's authentication: {}",
+                    errorMessage->value(network::keys::ErrorMessage,
+                                        "No error message provided.")));
+  }
+  return std::unexpected(std::format(
+      "No error message received from server. {}", errorMessage.error()));
+}
+
 auto clientHandshake(network::TcpSocket &serverSocket,
                      network::TcpSocket &ttpSocket,
                      crypto::X509Certificate &clientCert,
@@ -120,6 +168,7 @@ auto clientHandshake(network::TcpSocket &serverSocket,
         std::format("Couldn't convert client's certificate to PEM format. {}",
                     userCertPem.error())};
   }
+  logzy::trace("User certificate PEM.\n{}", *userCertPem);
 
   // TODO :: Service request should contian a nonce or stiemstamp signde with
   // private key to prevent reply attacks
@@ -127,7 +176,7 @@ auto clientHandshake(network::TcpSocket &serverSocket,
   if (auto err = serverSocket.send(
           network::Packet{.type = network::PacketType::ServiceRequest,
                           .payload = {
-                              {keys::UserCertPem, std::move(*userCertPem)},
+                              {keys::UserCertPem, *userCertPem},
                           }})) {
 
     return std::unexpected{std::format("ServiceRequest failed. {}", *err)};
@@ -135,10 +184,10 @@ auto clientHandshake(network::TcpSocket &serverSocket,
 
   logzy::debug("Waiting for ServerAuthOk from TTP.");
 
-  auto payload =
-      network::expectPacket(ttpSocket, network::PacketType::ServerAuthOk);
+  auto payload = waitForDataOrError(ttpSocket, serverSocket,
+                                    network::PacketType::ServerAuthOk);
   if (!payload) {
-    return std::unexpected(std::move(payload.error()));
+    return std::unexpected(std::move(payload).error());
   }
 
   logzy::debug("Parsing session ticket.");
@@ -152,8 +201,9 @@ auto clientHandshake(network::TcpSocket &serverSocket,
   // User  auth redirect happens here
 
   logzy::debug("Waiting for UserAuthRedirect packet");
-  if (auto res = network::expectPacket(ttpSocket,
-                                       network::PacketType::UserAuthRedirect);
+
+  if (auto res = waitForDataOrError(ttpSocket, serverSocket,
+                                    network::PacketType::UserAuthRedirect);
       !res) {
     return std::unexpected(std::move(res.error()));
   }
@@ -173,22 +223,20 @@ auto clientHandshake(network::TcpSocket &serverSocket,
   return receiveSessionKey(ttpSocket, clientKey);
 }
 
-auto serverHandshake(network::TcpSocket &clientSocket,
-                     network::TcpSocket &ttpSocket,
+auto serverHandshake(network::TcpSocket &ttpSocket,
                      const nlohmann::json &requestPayload,
-                     const crypto::Hash32 &serverID,
                      const crypto::RsaKeyPair &serverKey,
-                     const crypto::RsaKeyPair &ttpKey,
                      const crypto::X509Certificate &serverCertificate)
     -> std::expected<crypto::Aes256, std::string> {
   // Service request sent
   logzy::debug("Server handshake begin...");
 
   const auto userCertPem =
-      requestPayload.value("user_cert_pem", std::string_view{""});
+      requestPayload.value(keys::UserCertPem, std::string_view{""});
   if (userCertPem.empty()) {
     return std::unexpected{
-        "Client didnt supply 'user_cert_pem' key with ServiceRequest "};
+        std::format("Client didnt supply '{}' key with ServiceRequest ",
+                    keys::UserCertPem)};
   }
 
   logzy::trace("user certificate PEM:\n{}", userCertPem);
@@ -499,6 +547,8 @@ auto finalizeHandshake(network::TcpSocket &clientSocket,
 
   auto sessionKey = generateSessionKey();
   if (!sessionKey) {
+    network::sendError(clientSocket, "Failed to generate session key");
+    network::sendError(serverSocket, "Failed to generate session key");
     return std::optional{
         std::format("Couldn't generate session key. {}", sessionKey.error())};
   }
@@ -529,12 +579,16 @@ auto authenticateClient(crypto::X509Certificate &ttpCertificate,
   auto payload = network::expectPacket(clientSocket,
                                        network::PacketType::UserAuthDataSubmit);
   if (!payload) {
+    network::sendError(clientSocket, "Wrong packet type.");
     return std::optional{std::move(payload.error())};
   }
   logzy::debug("Received UserAuthDataSubmit packet");
 
   std::string userCertPem = payload->value(keys::UserCertPem, "");
   if (userCertPem.empty()) {
+    network::sendError(
+        clientSocket,
+        std::format("Missing {} JSON key in payload.", keys::UserCertPem));
     return std::optional{std::format("The client didn't include '{}'in the "
                                      "paylod JSON object.",
                                      keys::UserCertPem)};
@@ -544,6 +598,7 @@ auto authenticateClient(crypto::X509Certificate &ttpCertificate,
 
   auto result = parseAndVerifyCertificate(userCertPem, ttpCertificate);
   if (!result) {
+    network::sendError(clientSocket, "Invalid certificate");
     return std::optional{std::move(result.error())};
   }
 
@@ -596,6 +651,7 @@ auto authenticateService(const crypto::X509Certificate &ttpCertificate,
             return parseServerAuthPayload(payload);
           });
   if (!payload) {
+    network::sendError(serverSocket, "Wrong packet type");
     return std::unexpected{std::move(payload).error()};
   }
 
@@ -604,6 +660,7 @@ auto authenticateService(const crypto::X509Certificate &ttpCertificate,
   auto userCert =
       parseAndVerifyCertificate(payload->userCertPem, ttpCertificate);
   if (!userCert) {
+    network::sendError(serverSocket, "Invalid client certificate");
     return std::unexpected(std::format(
         "There was an error with client's certificate. {}", userCert.error()));
   }
@@ -613,6 +670,7 @@ auto authenticateService(const crypto::X509Certificate &ttpCertificate,
   auto serverCert =
       parseAndVerifyCertificate(payload->serverCertPem, ttpCertificate);
   if (!serverCert) {
+    network::sendError(serverSocket, "Invalid server certificate");
     return std::unexpected(
         std::format("There was an error with server's certificate. {}",
                     serverCert.error()));
