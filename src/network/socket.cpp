@@ -9,6 +9,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <optional>
+#include <pthread.h>
 #include <sys/socket.h>
 #include <system_error>
 
@@ -133,6 +134,10 @@ auto TcpSocket::connect(const std::string &host, std::uint16_t port) noexcept
         continue;
       }
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        if (receivedData.empty()) {
+          return std::expected<Packet, std::string>{
+              Packet{.type = PacketType::TimedOut}};
+        }
         break;
       }
       return std::unexpected(std::format(
@@ -141,6 +146,25 @@ auto TcpSocket::connect(const std::string &host, std::uint16_t port) noexcept
   }
 
   return decode(receivedData);
+}
+
+auto TcpSocket::setTimeout(std::uint32_t millis) noexcept
+    -> std::optional<std::string> {
+
+  const std::uint32_t seconds = millis / 1000;
+  const std::uint32_t micros = (millis % 1000) * 1000;
+
+  struct timeval t{.tv_sec = seconds, .tv_usec = micros};
+
+  if (::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO_NEW, &t, sizeof(t)) < 0) {
+    return std::optional{
+        std::format("Couldnt' set socket's receive timeout. {}",
+                    std::system_category().message(errno))};
+  }
+  return std::nullopt;
+}
+auto TcpSocket::disableTimeout() noexcept -> std::optional<std::string> {
+  return setTimeout(0);
 }
 
 //

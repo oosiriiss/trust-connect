@@ -31,6 +31,10 @@ public:
   [[nodiscard]] auto receive() const noexcept
       -> std::expected<Packet, std::string>;
 
+  [[nodiscard]] auto setTimeout(std::uint32_t millis) noexcept
+      -> std::optional<std::string>;
+  auto disableTimeout() noexcept -> std::optional<std::string>;
+
   void close() noexcept;
 
   friend class TcpServer;

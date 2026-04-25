@@ -18,7 +18,9 @@ enum class PacketType : std::int8_t {
   UserAuthRedirect,
   DataRequest,
   DataResponse,
+  ErrorMessage,
   CloseConnection,
+  TimedOut,
   __SizeGuard, // NOLINT
 };
 
@@ -56,10 +58,13 @@ template <> struct std::formatter<network::PacketType> {
         {Type::DataRequest, "DataRequest"},
         {Type::DataResponse, "DataResponse"},
         {Type::CloseConnection, "CloseConnection"},
+        {Type::TimedOut, "TimedOut"},
+        {Type::ErrorMessage, "ErrorMessage"},
         {Type::__SizeGuard, "__SizeGuard"},
     };
 
-    std::string_view name = {"PacketType::NOFORMATTERMAPPING"};
+    std::string name = "PacketType::NOFORMATTERMAPPING(int=" +
+                       std::to_string(std::to_underlying(t)) + ")";
     auto iter = mappings.find(t);
     if (iter != mappings.end()) {
       name = iter->second;

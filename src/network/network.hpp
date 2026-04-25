@@ -8,4 +8,7 @@ namespace network {
 
 [[nodiscard]] auto expectPacket(TcpSocket &socket, PacketType expectedType)
     -> std::expected<nlohmann::json, std::string>;
+
+void sendError(TcpSocket &socket, std::string_view errorMessage);
+
 } // namespace network
