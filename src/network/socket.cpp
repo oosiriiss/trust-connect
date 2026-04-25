@@ -5,7 +5,9 @@
 #include "network/packet.hpp"
 #include <arpa/inet.h>
 #include <asm-generic/socket.h>
+#include <cerrno>
 #include <expected>
+#include <filesystem>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <optional>
@@ -15,7 +17,49 @@
 
 namespace network {
 
-static void closeSocket(int &fd) {
+namespace {
+enum class ReadResult : std::uint8_t { Ok, WouldBlock, ConnectionClosed };
+
+auto readExact(int fd, const size_t toRead, std::string &out)
+    -> std::expected<ReadResult, std::string> {
+
+  out.clear();
+
+  size_t totalRead = 0;
+
+  std::array<char, 1024> buff{};
+
+  while (totalRead < toRead) {
+
+    size_t currentReadMaxBytes = std::min(toRead - totalRead, buff.size());
+
+    ssize_t read = recv(fd, buff.data(), currentReadMaxBytes, 0);
+
+    if (read > 0) {
+      totalRead += read;
+      out.append(std::string_view{buff.data(), static_cast<size_t>(read)});
+    }
+
+    if (read == 0) {
+      return ReadResult::ConnectionClosed;
+    }
+
+    if (read < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        return ReadResult::WouldBlock;
+      }
+      return std::unexpected(std::format(
+          "Receive failed. error: {}", std::system_category().message(errno)));
+    }
+  }
+
+  return ReadResult::Ok;
+}
+
+void closeSocket(int &fd) {
   if (fd == INVALID_SOCKET) {
     return;
   }
@@ -25,6 +69,7 @@ static void closeSocket(int &fd) {
   }
   fd = INVALID_SOCKET;
 }
+} // namespace
 
 TcpSocket::~TcpSocket() noexcept { close(); }
 TcpSocket::TcpSocket(TcpSocket &&other) noexcept : fd_{other.fd_} {
@@ -104,48 +149,56 @@ auto TcpSocket::connect(const std::string &host, std::uint16_t port) noexcept
 
 [[nodiscard]] auto TcpSocket::receive() const noexcept
     -> std::expected<Packet, std::string> {
-  logzy::trace("Receiving...");
+  logzy::debug("Receiving...");
 
-  std::expected<Packet, std::string> packet{Packet{}};
-  size_t received = 0;
+  std::string buffer;
 
-  std::string receivedData;
-
-  std::array<char, 256> buffer{};
-
-  while (true) {
-    ssize_t read = ::recv(fd_, buffer.data(), buffer.size(), 0);
-
-    if (read > 0) {
-
-      receivedData.append(std::string_view{
-          reinterpret_cast<const char *>(buffer.data()), // NOLINT
-          static_cast<size_t>(read)});
-
-      if (static_cast<size_t>(read) < buffer.size()) {
-        break;
-      }
-
-    } else if (read == 0) { // Graceful closed connection
-      return std::expected<Packet, std::string>{
-          Packet{.type = PacketType::CloseConnection}};
-    } else {
-      if (errno == EINTR) {
-        continue;
-      }
-      if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        if (receivedData.empty()) {
-          return std::expected<Packet, std::string>{
-              Packet{.type = PacketType::TimedOut}};
-        }
-        break;
-      }
-      return std::unexpected(std::format(
-          "Receive failed. error: {}", std::system_category().message(errno)));
-    }
+  auto headerBytesResult = readExact(fd_, HEADER_SIZE_BYTES, buffer);
+  if (!headerBytesResult) {
+    return std::unexpected(std::move(headerBytesResult).error());
   }
 
-  return decode(receivedData);
+  if (*headerBytesResult == ReadResult::ConnectionClosed) {
+    return Packet{.type = PacketType::CloseConnection};
+  }
+  if (*headerBytesResult == ReadResult::WouldBlock) {
+    return Packet{.type = PacketType::TimedOut};
+  }
+
+  logzy::trace("Read header");
+
+  auto header = decodeHeader(std::span{buffer.data(), HEADER_SIZE_BYTES});
+  if (!header) {
+    return std::unexpected(std::move(header).error());
+  }
+
+  logzy::trace("Decoded header");
+  auto payloadBytesResult = readExact(fd_, header->length, buffer);
+  if (!payloadBytesResult) {
+    return std::unexpected(std::move(payloadBytesResult).error());
+  }
+
+  if (*payloadBytesResult == ReadResult::ConnectionClosed) {
+    return Packet{.type = PacketType::CloseConnection};
+  }
+  if (*payloadBytesResult == ReadResult::WouldBlock) {
+    return Packet{.type = PacketType::TimedOut};
+  }
+
+  logzy::trace("Read payload");
+  auto payload = decodePayload(buffer);
+  if (!payload) {
+    return std::unexpected(std::move(payload).error());
+  }
+
+  logzy::debug("Received whole packet");
+
+  return std::expected<Packet, std::string>{
+      Packet{
+          .type = header->type,
+          .payload = std::move(payload).value(),
+      },
+  };
 }
 
 auto TcpSocket::setTimeout(std::uint32_t millis) noexcept

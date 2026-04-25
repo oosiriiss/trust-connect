@@ -24,6 +24,20 @@ enum class PacketType : std::int8_t {
   __SizeGuard, // NOLINT
 };
 
+using PacketTypeUnderlying = std::underlying_type_t<PacketType>;
+using LengthType = std::uint32_t;
+constexpr size_t TYPE_OFFSET = 0;
+constexpr size_t TYPE_SIZE_BYTES = sizeof(network::PacketType);
+constexpr size_t LENGTH_OFFSET = TYPE_OFFSET + TYPE_SIZE_BYTES;
+constexpr size_t LENGTH_SIZE_BYTES = sizeof(LengthType);
+constexpr size_t PAYLOAD_OFFSET = LENGTH_OFFSET + LENGTH_SIZE_BYTES;
+constexpr size_t HEADER_SIZE_BYTES = PAYLOAD_OFFSET;
+
+struct PacketHeader {
+  PacketType type;
+  LengthType length;
+};
+
 struct Packet {
   PacketType type;
   nlohmann::json payload;
@@ -34,8 +48,11 @@ using Payload = nlohmann::json;
 [[nodiscard]] auto encode(const Packet &packet)
     -> std::expected<std::string, std::string>;
 
-[[nodiscard]] auto decode(std::string_view data)
-    -> std::expected<Packet, std::string>;
+[[nodiscard]] auto decodeHeader(std::span<char> data) noexcept
+    -> std::expected<PacketHeader, std::string>;
+
+[[nodiscard]] auto decodePayload(std::span<char> data) noexcept
+    -> std::expected<Payload, std::string>;
 } // namespace network
 
 template <> struct std::formatter<network::PacketType> {
@@ -79,7 +96,7 @@ template <> struct std::formatter<network::Packet> {
     return ctx.begin();
   }
   static auto format(const network::Packet &p, std::format_context &ctx) {
-    return std::format_to(ctx.out(), "Packet(type={}, payload={}", p.type,
+    return std::format_to(ctx.out(), "Packet(type={}, payload={})", p.type,
                           p.payload.dump());
   }
 };
