@@ -4,6 +4,7 @@
 #include "crypto/rsa.hpp"
 #include "crypto/x509.hpp"
 #include "logzy/logzy.hpp"
+#include "network/network.hpp"
 #include "network/socket.hpp"
 #include "ttp/cli.hpp"
 #include "utility.hpp"
@@ -99,6 +100,11 @@ void handleClientConnection(network::TcpSocket clientSocketRaw,
     logzy::info("Handshake done.");
   } else {
     while (true) {
+
+      if (!clientSocket->isHealthy()) {
+        break;
+      }
+
       auto sessionInfo = protocol::authenticateService(state.ttpCertificate,
                                                        *clientSocket.get());
       if (!sessionInfo) {

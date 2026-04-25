@@ -9,6 +9,7 @@
 #include "crypto/rsa.hpp"
 #include "crypto/x509.hpp"
 #include "logzy/logzy.hpp"
+#include "network/network.hpp"
 #include "network/packet.hpp"
 #include "network/socket.hpp"
 #include "server/cli.hpp"

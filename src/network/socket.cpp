@@ -167,6 +167,41 @@ auto TcpSocket::disableTimeout() noexcept -> std::optional<std::string> {
   return setTimeout(0);
 }
 
+auto TcpSocket::isHealthy() const noexcept -> bool {
+
+  if (fd_ < 0) {
+    return false;
+  }
+
+  int err = 0;
+  socklen_t errLen = sizeof(err);
+
+  int res = getsockopt(fd_, SOL_SOCKET, SO_ERROR, &err, &errLen);
+
+  const bool sockOptErr = res != 0;
+  const bool hasError = err != 0;
+  if (sockOptErr || hasError) {
+    return false;
+  }
+
+  char buf = 0;
+  ssize_t peekRes = recv(fd_, &buf, 1, MSG_PEEK | MSG_DONTWAIT);
+
+  const bool gracefullyClosed = peekRes == 0;
+
+  if (gracefullyClosed) {
+    return false;
+  }
+
+  if (peekRes < 0) {
+    // EAGAIN AND EWOULDBLOCK are ok
+    if (errno != EAGAIN && errno != EWOULDBLOCK) {
+      return false;
+    }
+  }
+  return true;
+}
+
 //
 // Server
 //

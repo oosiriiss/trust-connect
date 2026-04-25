@@ -35,6 +35,8 @@ public:
       -> std::optional<std::string>;
   auto disableTimeout() noexcept -> std::optional<std::string>;
 
+  [[nodiscard]] auto isHealthy() const noexcept -> bool;
+
   void close() noexcept;
 
   friend class TcpServer;
