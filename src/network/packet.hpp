@@ -7,6 +7,9 @@
 
 namespace network {
 
+/**
+ * Allowed packet types
+ */
 enum class PacketType : std::int8_t {
   CertificateRequest,
   CertificateResponse,
@@ -35,24 +38,67 @@ constexpr size_t LENGTH_SIZE_BYTES = sizeof(LengthType);
 constexpr size_t PAYLOAD_OFFSET = LENGTH_OFFSET + LENGTH_SIZE_BYTES;
 constexpr size_t HEADER_SIZE_BYTES = PAYLOAD_OFFSET;
 
+/**
+ * Packet header that should be present at the beginning of each packets
+ */
 struct PacketHeader {
   PacketType type;
   LengthType length;
 };
 
+/**
+ * Packet using which the data can be transferred with TcpSocket or TcpServer
+ */
 struct Packet {
   PacketType type;
+  /**
+   * JSON payload
+   */
   nlohmann::json payload;
 };
 
 using Payload = nlohmann::json;
 
+/**
+ * @brief encodes packet to bytes that can  be transferred over network
+ *
+ * Writes PacketHeader and payload
+ *
+ * @param packet The packet to encode
+ *
+ * @return
+ * - Success: String containing the encoded packet's bytes
+ * - Error: String error message
+ */
 [[nodiscard]] auto encode(const Packet &packet)
     -> std::expected<std::string, std::string>;
 
+/**
+ * @brief decodes PacketHeader from bytes
+ *
+ * @param data Span to the bytes that should contain encoded
+ * PacketHeader
+ *
+ * @return
+ * - Success: Encoded PacketHeader struct
+ * - Error: String error message
+ *
+ * @ref encode(const Packet&)
+ */
 [[nodiscard]] auto decodeHeader(std::span<char> data) noexcept
     -> std::expected<PacketHeader, std::string>;
 
+/**
+ * @brief Decodes the bytes into Payload
+ *
+ * @param data Span to the raw payload bytes
+ *
+ * @return
+ * - Success: JSON decoded payload
+ * - Error: String error message
+ *
+ * @ref Payload
+ */
 [[nodiscard]] auto decodePayload(std::span<char> data) noexcept
     -> std::expected<Payload, std::string>;
 } // namespace network
