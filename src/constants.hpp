@@ -7,6 +7,3 @@ static constexpr std::string_view DEFAULT_TTP_IP = "127.0.0.1";
 static constexpr auto DEFAULT_TTP_PORT = 6601;
 } // namespace network
 
-namespace crypto {
-static constexpr std::string_view TTP_CERT_PATH = "ttp.cert";
-} // namespace crypto

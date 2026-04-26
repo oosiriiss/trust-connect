@@ -16,6 +16,39 @@
 
 namespace protocol {
 
+auto loadTtpData(std::string_view path) -> std::expected<TtpData, std::string> {
+
+  logzy::debug("Loading TTP certificate and public key from: '{}'", path);
+
+  std::expected<TtpData, std::string> data{TtpData{}};
+
+  if (auto cert = crypto::X509Certificate::fromFile(path)) {
+    data->certificate = std::move(*cert);
+    logzy::trace("Loaded certificate with CN={}",
+                 data->certificate.getCommonNameSafe());
+  } else {
+    return std::unexpected(
+        std::format("Couldn't load Ttp certificate from path: '{}'. Error :{}",
+                    path, cert.error()));
+  }
+
+  if (auto key = data->certificate.getPublicKey()) {
+    data->publicKey = std::move(*key);
+  } else {
+    return std::unexpected(
+        std::format("Couldn't load public key from TTP's certificate from "
+                    "path: '{}'. Error: {}",
+                    path, key.error()));
+  }
+
+  logzy::debug("TTP data loaded.");
+  return data;
+}
+
+// auto clientEstablishSession() -> std::expected<crypto::Aes256, std::string>
+// {} auto serverEstablishSession() -> std::expected<crypto::Aes256,
+// std::string> {}
+
 // auto TtpData::fromFile(std::string_view path);
 
 auto SessionTicket::toJson() -> nlohmann::json {
@@ -272,23 +305,6 @@ auto serverHandshake(network::TcpSocket &ttpSocket,
       "Validated. Waiting for client to finish authentication with TTP.");
 
   return receiveSessionKey(ttpSocket, serverKey);
-}
-
-auto connectTo(network::TcpSocket &socket, const std::string &host,
-               std::uint16_t port, std::string_view targetName) -> bool {
-
-  logzy::info("Connecting to {} at {}:{}", targetName, host, port);
-
-  auto socketRes = network::TcpSocket::connect(host, port);
-  if (!socketRes) {
-    logzy::error("Couldn't connect to {}. Reason: {}", targetName,
-                 socketRes.error());
-    return false;
-  }
-
-  logzy::info("successfully connected to: {}", targetName);
-  socket = std::move(*socketRes);
-  return true;
 }
 
 static inline auto

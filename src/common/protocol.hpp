@@ -9,6 +9,8 @@
 
 namespace protocol {
 
+static constexpr std::string_view TTP_CERT_PATH = "ttp.cert";
+
 namespace keys {
 
 constexpr std::string_view Id = "id";
@@ -32,6 +34,20 @@ struct TtpData {
   //    -> std::expected<TtpData, std::string>;
 };
 
+enum class ClientRole : std::uint8_t { Requester = 0, Service = 1 };
+
+[[nodiscard]] auto loadTtpData(std::string_view path = TTP_CERT_PATH)
+    -> std::expected<TtpData, std::string>;
+
+[[nodiscard]] auto registerWithTtp(network::TcpSocket &socket,
+                                   const crypto::Hash32 &id,
+                                   const crypto::RsaKeyPair &clientKey,
+                                   const TtpData &ttpData, ClientRole role)
+    -> std::expected<crypto::X509Certificate, std::string>;
+
+auto clientEstablishSession() -> std::expected<crypto::Aes256, std::string>;
+auto serverEstablishSession() -> std::expected<crypto::Aes256, std::string>;
+
 struct SessionTicket {
   std::string sessionId;
   std::string clientCn;
@@ -44,21 +60,9 @@ struct SessionTicket {
       -> std::expected<SessionTicket, std::string>;
 };
 
-enum class ClientRole : std::uint8_t { Requester = 0, Service = 1 };
-
 auto verifyAndParseSessionTicket(nlohmann::json &payload,
                                  const crypto::RsaKeyPair &ttpKey)
     -> std::expected<SessionTicket, std::string>;
-
-[[nodiscard]] auto connectTo(network::TcpSocket &socket,
-                             const std::string &host, std::uint16_t port,
-                             std::string_view targetName) -> bool;
-
-[[nodiscard]] auto registerWithTtp(network::TcpSocket &socket,
-                                   const crypto::Hash32 &id,
-                                   const crypto::RsaKeyPair &clientKey,
-                                   const TtpData &ttpData, ClientRole role)
-    -> std::expected<crypto::X509Certificate, std::string>;
 
 [[nodiscard]] auto clientHandshake(network::TcpSocket &serverSocket,
                                    network::TcpSocket &ttpSocket,

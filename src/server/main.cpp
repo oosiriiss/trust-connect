@@ -23,7 +23,6 @@ struct AppContext {
   crypto::Hash32 id{};
   crypto::X509Certificate serverCertificate;
   crypto::RsaKeyPair serverKey;
-  protocol::TtpData ttpData;
 };
 
 void handleDataRequest(network::TcpSocket &clientSocket,
@@ -70,11 +69,12 @@ void handleDataRequest(network::TcpSocket &clientSocket,
 }
 
 auto registerAndGetCertificate(network::TcpSocket &ttpSocket, AppContext &ctx,
+                               protocol::TtpData &ttpData,
                                bool falsifyCertificate) -> bool {
 
-  if (auto cert = protocol::registerWithTtp(ttpSocket, ctx.id, ctx.serverKey,
-                                            ctx.ttpData,
-                                            protocol::ClientRole::Service)) {
+  if (auto cert =
+          protocol::registerWithTtp(ttpSocket, ctx.id, ctx.serverKey, ttpData,
+                                    protocol::ClientRole::Service)) {
     ctx.serverCertificate = std::move(*cert);
   } else {
     logzy::error("Couldn't obtian certificate.");
@@ -147,18 +147,16 @@ auto main(int argc, const char *const *const argv) -> int {
   }
   logzy::info("ID generated: {}", crypto::hashToHex(ctx.id));
 
-  network::TcpSocket ttpSocket;
-  if (!protocol::connectTo(ttpSocket, args->ttpIp, args->ttpPort,
-                           "Trusted third party")) {
+  auto ttpSocket = network::connectTo(args->ttpIp, args->ttpPort, "TTP");
+  if (!ttpSocket) {
+    logzy::critical("Couldn't connect to TTP. {}", ttpSocket.error());
     return EXIT_FAILURE;
   }
 
-  if (auto cert = crypto::X509Certificate::fromFile(crypto::TTP_CERT_PATH)) {
-    ctx.ttpData.certificate = std::move(*cert);
-    logzy::info("Loaded certificate with CN={}",
-                ctx.ttpData.certificate.getCommonNameSafe());
-  } else {
-    logzy::critical("Couldn't load ttp certifiacte. {}", cert.error());
+  auto ttpData = protocol::loadTtpData();
+  if (!ttpData) {
+    logzy::critical("Couldn't load TTP data. {}", ttpData.error());
+    return EXIT_FAILURE;
   }
 
   if (auto keyResult = crypto::RsaKeyPair::generate()) {
@@ -168,23 +166,8 @@ auto main(int argc, const char *const *const argv) -> int {
     return EXIT_FAILURE;
   }
 
-  if (auto cert = crypto::X509Certificate::fromFile(crypto::TTP_CERT_PATH)) {
-    ctx.ttpData.certificate = std::move(*cert);
-    logzy::info("Loaded certificate with CN={}",
-                ctx.ttpData.certificate.getCommonNameSafe());
-  } else {
-    logzy::critical("Couldn't load ttp certifiacte. {}", cert.error());
-    return EXIT_FAILURE;
-  }
-
-  if (auto key = ctx.ttpData.certificate.getPublicKey()) {
-    ctx.ttpData.publicKey = std::move(*key);
-  } else {
-    logzy::critical("Couldn't load ttp' public key  {}", key.error());
-    return EXIT_FAILURE;
-  }
-
-  if (!registerAndGetCertificate(ttpSocket, ctx, args->falsifyCertificate)) {
+  if (!registerAndGetCertificate(*ttpSocket, ctx, *ttpData,
+                                 args->falsifyCertificate)) {
     return EXIT_FAILURE;
   }
 
@@ -210,7 +193,7 @@ auto main(int argc, const char *const *const argv) -> int {
     }
 
     if (auto sessKey =
-            protocol::serverHandshake(ttpSocket, payload->payload,
+            protocol::serverHandshake(*ttpSocket, payload->payload,
                                       ctx.serverKey, ctx.serverCertificate)) {
       sessionKey = std::move(sessKey).value();
     } else {

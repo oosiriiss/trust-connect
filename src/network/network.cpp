@@ -3,6 +3,22 @@
 #include "network/packet.hpp"
 
 namespace network {
+
+auto connectTo(const std::string &host, std::uint16_t port,
+               std::string_view targetName)
+    -> std::expected<TcpSocket, std::string> {
+  logzy::debug("Connecting to {} at {}:{}", targetName, host, port);
+
+  auto socketRes = network::TcpSocket::connect(host, port);
+  if (!socketRes) {
+    return std::unexpected(std::format("Couldn't connect to {}. Reason: {}",
+                                       targetName, socketRes.error()));
+  }
+
+  logzy::debug("successfully connected to: {}", targetName);
+  return socketRes;
+}
+
 auto expectPacket(TcpSocket &socket, PacketType expectedType)
     -> std::expected<nlohmann::json, std::string> {
 

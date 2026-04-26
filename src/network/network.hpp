@@ -8,7 +8,11 @@ namespace network {
 
 namespace keys {
 constexpr std::string_view ErrorMessage = "error_message";
-}
+} // namespace keys
+
+[[nodiscard]] auto connectTo(const std::string &host, std::uint16_t port,
+                             std::string_view targetName)
+    -> std::expected<TcpSocket, std::string>;
 
 [[nodiscard]] auto expectPacket(TcpSocket &socket, PacketType expectedType)
     -> std::expected<nlohmann::json, std::string>;

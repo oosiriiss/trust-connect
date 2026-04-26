@@ -11,6 +11,7 @@
 #include "crypto/rsa.hpp"
 #include "crypto/x509.hpp"
 #include "imgui.h"
+#include "network/network.hpp"
 #include "network/packet.hpp"
 #include "network/socket.hpp"
 #include "ui/window.hpp"
@@ -41,7 +42,6 @@ struct AppState {
   crypto::X509Certificate clientCertificate;
   std::vector<std::string> sentMessages;
   std::vector<std::string> serverResponses;
-  protocol::TtpData ttpData;
 };
 
 void sendData(std::string_view data, network::TcpSocket &serverSocket,
@@ -113,32 +113,26 @@ auto main(int argc, char const *const *const argv) -> int {
     ctx = std::move(*ctxOpt);
   }
 
-  network::TcpSocket serverSocket;
-  if (!protocol::connectTo(serverSocket, args->serverIp, args->serverPort,
-                           "Server")) {
+  auto serverSocket =
+      network::connectTo(args->serverIp, args->serverPort, "Server");
+
+  if (!serverSocket) {
+    logzy::critical("Couldn't conneect to server. {}", serverSocket.error());
     return EXIT_FAILURE;
   }
 
-  network::TcpSocket ttpSocket;
-  if (!protocol::connectTo(ttpSocket, args->ttpIp, args->ttpPort,
-                           "Trusted third party")) {
+  auto ttpSocket =
+      network::connectTo(args->ttpIp, args->ttpPort, "Trusted third party");
+
+  if (!ttpSocket) {
+    logzy::critical("Couldn't conneect to ttp. {}", ttpSocket.error());
     return EXIT_FAILURE;
   }
 
   AppState state{};
-  if (auto cert = crypto::X509Certificate::fromFile(crypto::TTP_CERT_PATH)) {
-    state.ttpData.certificate = std::move(*cert);
-    logzy::info("Loaded certificate with CN={}",
-                state.ttpData.certificate.getCommonNameSafe());
-  } else {
-    logzy::critical("Couldn't load ttp certifiacte. {}", cert.error());
-    return EXIT_FAILURE;
-  }
-
-  if (auto key = state.ttpData.certificate.getPublicKey()) {
-    state.ttpData.publicKey = std::move(*key);
-  } else {
-    logzy::critical("Couldn't load ttp' public key  {}", key.error());
+  auto ttpData = protocol::loadTtpData();
+  if (!ttpData) {
+    logzy::critical("Couldn't load TTP data. {}", ttpData.error());
     return EXIT_FAILURE;
   }
 
@@ -186,7 +180,7 @@ auto main(int argc, char const *const *const argv) -> int {
         logzy::trace("Beggining registering with TTP");
 
         if (auto cert = protocol::registerWithTtp(
-                ttpSocket, state.id, ctx.rsaKey, state.ttpData,
+                *ttpSocket, state.id, ctx.rsaKey, *ttpData,
                 protocol::ClientRole::Requester)) {
           state.clientCertificate = std::move(*cert);
           state.stage = AppStage::Registered;
@@ -207,8 +201,8 @@ auto main(int argc, char const *const *const argv) -> int {
 
         if (ImGui::Button("Request service")) {
           if (auto sessionKey = protocol::clientHandshake(
-                  serverSocket, ttpSocket, *activeCertificate, ctx.rsaKey,
-                  state.ttpData.publicKey)) {
+                  *serverSocket, *ttpSocket, *activeCertificate, ctx.rsaKey,
+                  ttpData->publicKey)) {
             state.sessionKey = std::move(*sessionKey);
             state.stage = AppStage::Authenticated;
             logzy::info("Session key obtained.");
@@ -233,7 +227,7 @@ auto main(int argc, char const *const *const argv) -> int {
               std::string_view{inputFieldText.data(), // To not send the whole
                                                       // 256 byte string buffer.
                                strlen(inputFieldText.c_str())},
-              serverSocket, state);
+              *serverSocket, state);
         }
 
         {

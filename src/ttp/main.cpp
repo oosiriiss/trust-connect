@@ -223,7 +223,7 @@ auto main(int argc, const char *const *const argv) -> int {
 
   // udmping cert to file
 
-  if (auto err = state.ttpCertificate.saveToFile(crypto::TTP_CERT_PATH)) {
+  if (auto err = state.ttpCertificate.saveToFile(protocol::TTP_CERT_PATH)) {
     logzy::error("{}", *err);
     return EXIT_FAILURE;
   }
