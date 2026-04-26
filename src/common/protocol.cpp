@@ -226,8 +226,8 @@ static inline auto receiveSessionKey(network::TcpSocket &ttpSocket,
   return aes;
 }
 
-auto verifyAndParseSessionTicket(nlohmann::json &payload,
-                                 const crypto::RsaKeyPair &ttpKey)
+static auto verifyAndParseSessionTicket(nlohmann::json &payload,
+                                        const crypto::RsaKeyPair &ttpKey)
     -> std::expected<SessionTicket, std::string> {
 
   if (auto res = crypto::verifyPayload(ttpKey, payload)) {
