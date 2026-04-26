@@ -10,18 +10,30 @@
 
 namespace cli {
 
+/**
+ * Type trait utility to extract OptionKey from the OptionContainer
+ */
 template <typename> struct extract_key;
 
+/**
+ * @brief Specialization to extract the Key type from a OptionContainer.
+ */
 template <typename Key> struct extract_key<cppli::OptionContainer<Key>> {
   using type = Key; // NOLINT
 };
 
+/**
+ * Helper alias to extract the key type
+ */
 template <typename T>
 using option_key_t = // NOLINT
     typename extract_key<decltype(T::options())>::type;
 
 /**
  * @brief Concept for types that can be constructed from parsed CLI arguments.
+ *
+ * Enforces the @p T to provide a static options() method reutning available
+ * options and static T::from() method to create the object
  */
 template <typename T>
 concept ArgContext = requires(T t, cppli::ParseResult<option_key_t<T>> result) {
@@ -64,7 +76,18 @@ template <ArgContext T>
 
   return T::from(result);
 }
-
+/**
+ * @brief Attempts to parse a string view into an integral type.
+ *
+ * @tparam IntType The integral type to parse the string into
+ *
+ * @param input The string view containing the numeric characters
+ * @param out Reference to the variable where the parsed integer will be stored
+ *
+ * @return
+ * - Success: true (parsed value is written to @p out)
+ * - Error: false (error message is printed to stdout)
+ */
 template <std::integral IntType>
 inline auto tryParseTo(std::string_view input, IntType &out) -> bool {
 

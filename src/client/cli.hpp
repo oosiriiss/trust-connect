@@ -10,6 +10,10 @@
 #include <print>
 
 namespace cli::client {
+
+/**
+ * Enum containing avaialble client CLI options
+ */
 enum class ClientOption : std::uint_fast8_t {
   ServerIp,
   ServerPort,
@@ -18,12 +22,21 @@ enum class ClientOption : std::uint_fast8_t {
   Help
 };
 
+/**
+ * @brief Holds the parsed CLI data
+ *
+ * Client's implementation of the ::cli::ArgContext concept
+ */
 struct ClientArguments {
   std::string serverIp{network::DEFAULT_SERVER_IP};
   std::string ttpIp{network::DEFAULT_TTP_IP};
   std::uint16_t serverPort{network::DEFAULT_SERVER_PORT};
   std::uint16_t ttpPort{network::DEFAULT_TTP_PORT};
 
+  /**
+   * Returns cppli::OptionContainer<ClientOption> containing all the client's
+   * available CLI options
+   */
   [[nodiscard]] static constexpr auto options()
       -> cppli::OptionContainer<ClientOption> {
     cppli::OptionContainer<ClientOption> options;
@@ -64,6 +77,9 @@ struct ClientArguments {
     return options;
   }
 
+  /**
+   * @brief Parses the raw CLI results int ClientArguments structure
+   */
   [[nodiscard]] static constexpr auto
   from(const cppli::ParseResult<ClientOption> &result)
       -> std::expected<ClientArguments, int> {

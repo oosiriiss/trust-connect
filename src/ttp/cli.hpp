@@ -10,11 +10,24 @@
 #include <print>
 
 namespace cli::ttp {
+
+/**
+ * Enum containing avaialble TTP CLI options
+ */
 enum class TtpOption : std::uint8_t { Help, BindPort };
 
+/**
+ * @brief Holds the parsed CLI data
+ *
+ * TTP's implementation of the ::cli::ArgContext concept
+ */
 struct TtpArguments {
   std::uint16_t bindPort = network::DEFAULT_TTP_PORT;
 
+  /**
+   * Returns cppli::OptionContainer<TtpOption> containing all the TTP's
+   * available CLI options
+   */
   [[nodiscard]] static constexpr auto options()
       -> cppli::OptionContainer<TtpOption> {
 
@@ -37,6 +50,9 @@ struct TtpArguments {
     return options;
   }
 
+  /**
+   * @brief Parses the raw CLI results int TtpArguments struct
+   */
   [[nodiscard]] static constexpr auto
   from(const cppli::ParseResult<TtpOption> &result)
       -> std::expected<TtpArguments, int> {
