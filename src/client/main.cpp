@@ -3,12 +3,9 @@
 #include "client/cli.hpp"
 #include "common/cli.hpp"
 #include "common/protocol.hpp"
-#include "constants.hpp"
 #include "crypto/aes.hpp"
-#include "crypto/base64.hpp"
 #include "crypto/crypto.hpp"
 #include "crypto/hash.hpp"
-#include "crypto/rsa.hpp"
 #include "crypto/x509.hpp"
 #include "imgui.h"
 #include "network/network.hpp"
@@ -17,7 +14,6 @@
 #include "ui/window.hpp"
 #include <GLFW/glfw3.h>
 #include <cstdlib>
-#include <ios>
 #include <logzy/formatters.hpp>
 #include <logzy/logzy.hpp>
 
@@ -27,7 +23,7 @@ namespace {
 
 enum class AppStage {
   GeneratingID,
-  Registering,
+  ObtainCertificate,
   Registered,
   Authenticated,
 
@@ -162,7 +158,7 @@ auto main(int argc, char const *const *const argv) -> int {
           if (auto idExp = crypto::generateRandomId("UserSeed")) {
             state.id = *idExp;
             logzy::info("Created user id: {}", crypto::hashToHex(state.id));
-            state.stage = AppStage::Registering;
+            state.stage = AppStage::ObtainCertificate;
           } else {
             idExp.error();
             state.errorMessage =
@@ -171,17 +167,16 @@ auto main(int argc, char const *const *const argv) -> int {
         }
       } break;
 
-      case AppStage::Registering: {
+      case AppStage::ObtainCertificate: {
         ImGui::Text("User ID: %s", crypto::hashToHex(state.id).c_str());
 
-        if (!ImGui::Button("Register with TTP")) {
+        if (!ImGui::Button("Obtain certificate from TTP")) {
           break;
         }
-        logzy::trace("Beggining registering with TTP");
 
-        if (auto cert = protocol::registerWithTtp(
-                *ttpSocket, state.id, ctx.rsaKey, *ttpData,
-                protocol::ClientRole::Requester)) {
+        if (auto cert = protocol::obtainCertificate(*ttpSocket,
+                                                    crypto::hashToHex(state.id),
+                                                    ctx.rsaKey, *ttpData)) {
           state.clientCertificate = std::move(*cert);
           state.stage = AppStage::Registered;
         } else {
@@ -195,25 +190,39 @@ auto main(int argc, char const *const *const argv) -> int {
       case AppStage::Registered: {
         ImGui::Checkbox("Use false certificate", &useFakeCertificate);
 
+        if (!ImGui::Button("Request service")) {
+          break;
+        }
+
+        ttpSocket = network::connectTo(args->ttpIp, args->ttpPort,
+                                       "Trusted third party");
+        if (!ttpSocket) {
+          logzy::error("Connecting to TTP failed. {}", ttpSocket.error());
+          break;
+        }
+
+        if (auto err = protocol::initiateAuthentication(
+                *ttpSocket, state.clientCertificate,
+                protocol::ClientRole::Requester)) {
+          logzy::error("Couldn't initiate atuhentication with TTP. {}", *err);
+          break;
+        }
+
         crypto::X509Certificate *activeCertificate =
             (useFakeCertificate) ? &falseCertificate.value()
                                  : &state.clientCertificate;
 
-        if (ImGui::Button("Request service")) {
-          if (auto sessionKey = protocol::clientHandshake(
-                  *serverSocket, *ttpSocket, *activeCertificate, ctx.rsaKey,
-                  ttpData->publicKey)) {
-            state.sessionKey = std::move(*sessionKey);
-            state.stage = AppStage::Authenticated;
-            logzy::info("Session key obtained.");
-          } else {
-            logzy::error("{}", sessionKey.error());
-            state.errorMessage =
-                std::format("Authentication failed. {}", sessionKey.error());
-          }
+        if (auto sessionKey = protocol::clientHandshake(
+                *serverSocket, *ttpSocket, *activeCertificate, ctx.rsaKey,
+                ttpData->key)) {
+          state.sessionKey = std::move(*sessionKey);
+          state.stage = AppStage::Authenticated;
+          logzy::info("Session key obtained.");
+        } else {
+          logzy::error("{}", sessionKey.error());
+          state.errorMessage =
+              std::format("Authentication failed. {}", sessionKey.error());
         }
-        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s",
-                           state.errorMessage.c_str());
 
       } break;
       case AppStage::Authenticated: {
@@ -232,7 +241,8 @@ auto main(int argc, char const *const *const argv) -> int {
 
         {
           ImGui::BeginChild("Messages that server responded to", ImVec2(0, 300),
-                            true, ImGuiWindowFlags_HorizontalScrollbar);
+                            ImGuiChildFlags_Borders,
+                            ImGuiWindowFlags_HorizontalScrollbar);
 
           size_t msgResponsePairs =
               std::min(state.sentMessages.size(), state.serverResponses.size());
@@ -246,6 +256,10 @@ auto main(int argc, char const *const *const argv) -> int {
         }
       } break;
       }
+
+      // Error message is visible in all screens
+      ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s",
+                         state.errorMessage.c_str());
     }
     endFrame(ctx);
   }

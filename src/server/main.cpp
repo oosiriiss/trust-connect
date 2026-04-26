@@ -1,9 +1,6 @@
 #include "common/cli.hpp"
 #include "common/protocol.hpp"
-#include "constants.hpp"
-#include "cppli/cppli.hpp"
 #include "crypto/aes.hpp"
-#include "crypto/base64.hpp"
 #include "crypto/crypto.hpp"
 #include "crypto/hash.hpp"
 #include "crypto/rsa.hpp"
@@ -14,7 +11,6 @@
 #include "network/socket.hpp"
 #include "server/cli.hpp"
 #include <cstdlib>
-#include <ios>
 #include <unistd.h>
 
 namespace {
@@ -72,12 +68,11 @@ auto registerAndGetCertificate(network::TcpSocket &ttpSocket, AppContext &ctx,
                                protocol::TtpData &ttpData,
                                bool falsifyCertificate) -> bool {
 
-  if (auto cert =
-          protocol::registerWithTtp(ttpSocket, ctx.id, ctx.serverKey, ttpData,
-                                    protocol::ClientRole::Service)) {
+  if (auto cert = protocol::obtainCertificate(
+          ttpSocket, crypto::hashToHex(ctx.id), ctx.serverKey, ttpData)) {
     ctx.serverCertificate = std::move(*cert);
   } else {
-    logzy::error("Couldn't obtian certificate.");
+    logzy::error("Couldn't obtain certificate. {}", cert.error());
     if (!falsifyCertificate) {
       return false;
     }
@@ -158,7 +153,6 @@ auto main(int argc, const char *const *const argv) -> int {
     logzy::critical("Couldn't load TTP data. {}", ttpData.error());
     return EXIT_FAILURE;
   }
-
   if (auto keyResult = crypto::RsaKeyPair::generate()) {
     ctx.serverKey = std::move(*keyResult);
   } else {
@@ -190,6 +184,19 @@ auto main(int argc, const char *const *const argv) -> int {
     auto payload = clientSocket->receive();
     if (!payload) {
       logzy::error("Couldn't ceveive. {}", payload.error());
+    }
+
+    ttpSocket =
+        network::connectTo(args->ttpIp, args->ttpPort, "Trusted third party");
+    if (!ttpSocket) {
+      logzy::error("Connecting to TTP failed. {}", ttpSocket.error());
+      break;
+    }
+
+    if (auto err = protocol::initiateAuthentication(
+            *ttpSocket, ctx.serverCertificate, protocol::ClientRole::Service)) {
+      logzy::error("Couldn't initiate atuhentication with TTP. {}", *err);
+      break;
     }
 
     if (auto sessKey =

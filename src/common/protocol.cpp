@@ -33,7 +33,7 @@ auto loadTtpData(std::string_view path) -> std::expected<TtpData, std::string> {
   }
 
   if (auto key = data->certificate.getPublicKey()) {
-    data->publicKey = std::move(*key);
+    data->key = std::move(*key);
   } else {
     return std::unexpected(
         std::format("Couldn't load public key from TTP's certificate from "
@@ -43,6 +43,109 @@ auto loadTtpData(std::string_view path) -> std::expected<TtpData, std::string> {
 
   logzy::debug("TTP data loaded.");
   return data;
+}
+
+auto initiateAuthentication(network::TcpSocket &ttpSocket,
+                            crypto::X509Certificate &clientCertificate,
+                            ClientRole role) -> std::optional<std::string> {
+  logzy::debug("Initiating authentication");
+
+  auto certificatePem = clientCertificate.toPem();
+  if (!certificatePem) {
+    return std::optional(std::move(certificatePem).error());
+  }
+
+  if (auto err = ttpSocket.send(network::Packet{
+          .type = network::PacketType::InitiateAuth,
+          .payload = {
+              {keys::CertificatePem, std::move(certificatePem).value()},
+              {keys::Role, role},
+          }})) {
+    return err;
+  }
+
+  auto response =
+      network::expectPacket(ttpSocket, network::PacketType::InitiateAuthOk);
+  if (!response) {
+    return std::optional{std::move(response).error()};
+  }
+
+  return std::nullopt;
+}
+
+namespace {
+struct InitiateAuthenticationPayload {
+  crypto::X509Certificate clientCertificate;
+  ClientRole role;
+
+  [[nodiscard]] static auto parse(nlohmann::json &payload)
+      -> std::expected<InitiateAuthenticationPayload, std::string> {
+
+    const int rawRole = payload.value(keys::Role, -1);
+    const auto certificatePem =
+        payload.value<std::string_view>(keys::CertificatePem, "");
+
+    if (rawRole == -1) {
+      return std::unexpected("Role not provided.");
+    }
+    if (certificatePem.empty()) {
+      return std::unexpected("Certificate PEM not provided.");
+    }
+
+    if (rawRole != std::to_underlying(ClientRole::Requester) &&
+        rawRole != std::to_underlying(ClientRole::Service)) {
+      return std::unexpected(
+          std::format("Invalid role. Expected ClientRole::Requester or "
+                      "ClientRole::Service and got(int={})",
+                      rawRole));
+    }
+
+    auto certificate = crypto::X509Certificate::fromPem(certificatePem);
+    if (!certificate) {
+      return std::unexpected(std::move(certificate).error());
+    }
+
+    return std::expected<InitiateAuthenticationPayload, std::string>{{
+        .clientCertificate = std::move(certificate).value(),
+        .role = static_cast<ClientRole>(rawRole),
+    }};
+  }
+};
+} // namespace
+
+auto handleInitiateAuthentication(network::TcpSocket &clientSocket,
+                                  nlohmann::json &rawPayload, TtpData &ttpData)
+    -> std::expected<ClientInfo, std::string> {
+  logzy::debug("Initiating authentication.");
+
+  auto payload = InitiateAuthenticationPayload::parse(rawPayload);
+  if (!payload) {
+    return std::unexpected(std::move(payload).error());
+  }
+
+  auto result = ttpData.certificate.verify(payload->clientCertificate);
+  if (!result) {
+    return std::unexpected(std::move(result).error());
+  }
+
+  if (!*result) {
+    return std::unexpected("Invalid certificate");
+  }
+
+  auto name = payload->clientCertificate.getCommonName();
+  if (!name) {
+    return std::unexpected(std::move(name).error());
+  }
+
+  if (auto err = clientSocket.send(network::Packet{
+          .type = network::PacketType::InitiateAuthOk, .payload = {}})) {
+    return std::unexpected(std::move(name).error());
+  }
+
+  return std::expected<ClientInfo, std::string>{
+      ClientInfo{.commonName = std::move(name).value(),
+                 .publicCertificate = std::move(payload->clientCertificate),
+                 .role = payload->role}};
 }
 
 // auto clientEstablishSession() -> std::expected<crypto::Aes256, std::string>
@@ -336,44 +439,39 @@ parseAndVerifyCertificate(std::string_view certificatePem,
   return certificate;
 }
 
-[[nodiscard]] auto registerWithTtp(network::TcpSocket &socket,
-                                   const crypto::Hash32 &id,
-                                   const crypto::RsaKeyPair &clientKey,
-                                   const TtpData &ttpData, ClientRole role)
+[[nodiscard]] auto
+obtainCertificate(network::TcpSocket &ttpSocket, std::string_view id,
+                  const crypto::RsaKeyPair &clientKey, const TtpData &ttpData)
     -> std::expected<crypto::X509Certificate, std::string> {
 
-  std::string publicKeyPem;
-  if (auto res = clientKey.publicKeyPem()) {
-    publicKeyPem = std::move(*res);
-  } else {
+  auto publicKeyPem = clientKey.publicKeyPem();
+  if (!publicKeyPem) {
+    return std::unexpected{std::format("Couldnt' create public key pem. {}",
+                                       publicKeyPem.error())};
+  }
+
+  auto encryptedId = crypto::encryptAndEncode(id, ttpData.key);
+  if (!encryptedId) {
     return std::unexpected{
-        std::format("Couldnt' create public key pem. {}", res.error())};
+        std::format("Couldn't encrypt id. {}", encryptedId.error())};
   }
 
-  std::string encryptedId;
-  if (auto res =
-          crypto::encryptAndEncode(crypto::hashToHex(id), ttpData.publicKey)) {
-    encryptedId = std::move(*res);
-  } else {
-    return std::unexpected{std::format("Couldn't encrypt id. {}", res.error())};
-  }
-
-  logzy::info("Registering with TTP");
-  logzy::trace("Requesting TTP's certificate.");
-  if (auto err = socket.send({.type = network::PacketType::CertificateRequest,
-                              .payload = {
-                                  {keys::Id, encryptedId},
-                                  {keys::PublicKeyPem, std::move(publicKeyPem)},
-                                  {keys::Role, std::to_underlying(role)},
-                              }})) {
+  logzy::debug("Registering with TTP");
+  logzy::debug("Requesting TTP's certificate.");
+  if (auto err = ttpSocket.send(
+          {.type = network::PacketType::CertificateRequest,
+           .payload = {
+               {keys::Id, std::move(encryptedId).value()},
+               {keys::PublicKeyPem, std::move(publicKeyPem).value()},
+           }})) {
     return std::unexpected{
         std::format("Couldn't send packet to TTP: {}", *err)};
   }
 
   logzy::trace("Requested. Waiting for response");
 
-  auto payload =
-      network::expectPacket(socket, network::PacketType::CertificateResponse);
+  auto payload = network::expectPacket(
+      ttpSocket, network::PacketType::CertificateResponse);
   if (!payload) {
     return std::unexpected{std::move(payload).error()};
   }
@@ -390,7 +488,7 @@ parseAndVerifyCertificate(std::string_view certificatePem,
 }
 
 namespace {
-struct RegisterPayload {
+struct ObtainCertificatePayload {
   std::string clientId;
   ClientRole role;
   crypto::RsaKeyPair publicKey;
@@ -398,9 +496,10 @@ struct RegisterPayload {
 
 auto parseRegisterPayload(const nlohmann::json &payload,
                           const crypto::RsaKeyPair &ttpKey)
-    -> std::expected<RegisterPayload, std::string> {
+    -> std::expected<ObtainCertificatePayload, std::string> {
   logzy::debug("Parsing register payload.");
-  std::expected<RegisterPayload, std::string> parsed{RegisterPayload{}};
+  std::expected<ObtainCertificatePayload, std::string> parsed{
+      ObtainCertificatePayload{}};
 
   const auto publicKeyPem =
       payload.value(keys::PublicKeyPem, std::string_view{""});
@@ -459,29 +558,25 @@ auto extractClientInfo(crypto::X509Certificate &&clientCertificate,
 }
 } // namespace
 
-auto handleRegister(crypto::X509Certificate &ttpCertificate,
-                    network::TcpSocket &client,
-                    const crypto::RsaKeyPair &ttpKey)
-    -> std::expected<ClientInfo, std::string> {
+auto handleObtainCertificate(network::TcpSocket &client,
+                             nlohmann::json &rawPayload, TtpData &ttpData
+
+                             ) -> std::optional<std::string> {
   logzy::debug("Registering user. Waiting for certificate request packet");
 
-  auto parsedPayload =
-      network::expectPacket(client, network::PacketType::CertificateRequest)
-          .and_then([&ttpKey](const nlohmann::json &payload)
-                        -> std::expected<RegisterPayload, std::string> {
-            return parseRegisterPayload(payload, ttpKey);
-          });
-  if (!parsedPayload) {
-    return std::unexpected(std::format("Couldn't parse register payload. {}",
-                                       parsedPayload.error()));
+  auto payload = parseRegisterPayload(rawPayload, ttpData.key);
+
+  if (!payload) {
+    return std::optional(
+        std::format("Couldn't parse register payload. {}", payload.error()));
   }
 
-  auto clientCertificate = ttpCertificate.issue(
-      parsedPayload->publicKey, parsedPayload->clientId, ttpKey);
+  auto clientCertificate = ttpData.certificate.issue(
+      payload->publicKey, payload->clientId, ttpData.key);
   if (!clientCertificate) {
 
-    return std::unexpected(std::format("Couldn't create user's certificate.{}",
-                                       clientCertificate.error()));
+    return std::optional(std::format("Couldn't create user's certificate.{}",
+                                     clientCertificate.error()));
   }
 
   logzy::trace("Created user certificate for CN '{}'",
@@ -491,7 +586,7 @@ auto handleRegister(crypto::X509Certificate &ttpCertificate,
 
   auto userCertPem = clientCertificate->toPem();
   if (!userCertPem) {
-    return std::unexpected(std::format(
+    return std::optional(std::format(
         "Couldn't convert usercertificate to PEM. {}", userCertPem.error()));
   }
 
@@ -500,12 +595,13 @@ auto handleRegister(crypto::X509Certificate &ttpCertificate,
           .payload = {
               {keys::CertificatePem, std::move(userCertPem).value()},
           }})) {
-    return std::unexpected(
+    return std::optional(
         std::format("Error while sending CertificateResponse. {}", *err));
   }
 
-  return extractClientInfo(std::move(clientCertificate).value(),
-                           parsedPayload->role);
+  logzy::debug("Issued certificate.");
+
+  return std::nullopt;
 }
 
 namespace {

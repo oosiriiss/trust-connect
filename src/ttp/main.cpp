@@ -1,16 +1,17 @@
 #include "common/cli.hpp"
 #include "common/protocol.hpp"
-#include "constants.hpp"
 #include "crypto/rsa.hpp"
 #include "crypto/x509.hpp"
 #include "logzy/logzy.hpp"
 #include "network/network.hpp"
+#include "network/packet.hpp"
 #include "network/socket.hpp"
 #include "ttp/cli.hpp"
 #include "utility.hpp"
 #include <cstdlib>
 #include <expected>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -25,12 +26,14 @@ struct ClientData {
 };
 struct PendingSession {
   protocol::SessionInfo info;
-  std::weak_ptr<network::TcpSocket> serviceSocket;
+  std::shared_ptr<network::TcpSocket> serviceSocket;
 };
 
 struct TtpState {
-  crypto::X509Certificate ttpCertificate;
-  crypto::RsaKeyPair ttpPrivateKey;
+  /**
+   * Private key and CA certificate
+   */
+  protocol::TtpData data;
 
   std::unordered_map<std::string, ClientData, TransparentStringHash,
                      TransparentStringCompare>
@@ -43,32 +46,226 @@ struct TtpState {
   std::mutex mutex;
 };
 
-void failClientsideAuth(network::TcpSocket &clientSocket, TtpState &state,
-                        std::string_view clientCommonName,
-                        std::string_view errorMsg,
-                        std::string_view errorDetails) {
-  logzy::error("{}. {}", errorMsg, errorDetails);
-
-  network::sendError(clientSocket, errorMsg);
-  logzy::debug("Client notified of error.");
-
-  auto serverSockPtr = state.pendingSessions.find(clientCommonName);
-  if (serverSockPtr == state.pendingSessions.end()) {
-    logzy::error("No server connected with client '{}' found.",
-                 clientCommonName);
-    return;
-  }
-
-  if (auto sock = serverSockPtr->second.serviceSocket.lock()) {
-    network::sendError(*sock.get(), errorMsg);
-  }
-
-  logzy::debug("Notified the server.");
-}
+#define FAIL_CLIENTSIDE_AUTH(clientSocket, state, clientCommonName, errorMsg,  \
+                             errorDetails)                                     \
+  do {                                                                         \
+    if (clientSocket) {                                                        \
+      network::sendError(*(clientSocket), errorMsg);                           \
+      logzy::debug("Client notified of error.");                               \
+    } else {                                                                   \
+      logzy::error(                                                            \
+          "Couldn't lock client's socket when failing at client auth.");       \
+    }                                                                          \
+    logzy::error("{}. {}", errorMsg, errorDetails);                            \
+    auto serverSockPtr = (state).pendingSessions.find(clientCommonName);       \
+    if (serverSockPtr == (state).pendingSessions.end()) {                      \
+      logzy::error("No server connected with client '{}' found.",              \
+                   clientCommonName);                                          \
+      break;                                                                   \
+    }                                                                          \
+    auto sock = serverSockPtr->second.serviceSocket;                           \
+    network::sendError(*sock.get(), errorMsg);                                 \
+    logzy::debug("Notified the server.");                                      \
+  } while (0)
 
 void failServersideAuth(network::TcpSocket &serverSocket,
                         std::string_view errorMsg,
                         std::string_view errorDetails) {}
+
+void certificateRequest(std::shared_ptr<network::TcpSocket> &clientSocket,
+                        nlohmann::json &payload, protocol::TtpData &ttpData) {
+
+  logzy::info("Recevied certificate request.");
+
+  if (auto err = protocol::handleObtainCertificate(*clientSocket.get(), payload,
+                                                   ttpData)) {
+    network::sendError(*clientSocket.get(), "Couldn't issue certificate.");
+    logzy::critical("Issueing certificate failed. {}", *err);
+    return;
+  }
+  logzy::info("Certificate issued");
+}
+
+auto initiateAuth(std::shared_ptr<network::TcpSocket> &clientSocket,
+                  nlohmann::json &payload, TtpState &state)
+    -> std::optional<std::pair<protocol::ClientRole, std::string>> {
+  logzy::info("Initiating authentication");
+
+  auto clientInfo = protocol::handleInitiateAuthentication(*clientSocket.get(),
+                                                           payload, state.data);
+  if (!clientInfo) {
+    network::sendError(*clientSocket,
+                       std::format("Initiating authentication failed. {}",
+                                   clientInfo.error()));
+    logzy::error("Initiating authentication failed");
+    return std::nullopt;
+  }
+
+  logzy::info("Client {} authenticated.", clientInfo->commonName);
+
+  auto commonName = clientInfo->commonName;
+
+  ClientData data{.info = std::move(clientInfo).value(),
+                  .clientSocket = clientSocket};
+  logzy::info("Saving connection");
+  {
+    std::lock_guard lock{state.mutex};
+    state.connectedClients.emplace(commonName, std::move(data));
+  }
+  logzy::info("Connection saved. Ready for authentication");
+  return std::optional{std::make_pair(data.info.role, std::move(commonName))};
+}
+
+auto waitForSessionData(TtpState &state, const std::string &commonName,
+                        network::TcpSocket &clientSocket)
+    -> std::optional<std::pair<ClientData, PendingSession>> {
+
+  logzy::info("Waiting for client's correlated server");
+
+  auto startTime = std::chrono::steady_clock::now();
+  auto timeout = std::chrono::seconds(5);
+
+  while (std::chrono::steady_clock::now() - startTime < timeout) {
+    {
+      std::lock_guard lock{state.mutex};
+
+      auto serverDataIter = state.pendingSessions.find(commonName);
+      auto clientDataIter = state.connectedClients.find(commonName);
+
+      if (serverDataIter != state.pendingSessions.end() &&
+          clientDataIter != state.connectedClients.end()) {
+
+        auto clientNode = state.connectedClients.extract(clientDataIter);
+        auto serverNode = state.pendingSessions.extract(serverDataIter);
+
+        return std::make_pair(std::move(clientNode.mapped()),
+                              std::move(serverNode.mapped()));
+      }
+    }
+
+    if (!clientSocket.isHealthy()) {
+      logzy::warn("Client disconnected while waiting for server.");
+      return std::nullopt;
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+
+  return std::nullopt;
+}
+
+void requesterAuthenticate(std::shared_ptr<network::TcpSocket> &clientSocket,
+                           TtpState &state, const std::string &commonName) {
+  logzy::info("Authenticating client.");
+  if (auto err =
+          protocol::authenticateClient(state.data.certificate, *clientSocket)) {
+    FAIL_CLIENTSIDE_AUTH(clientSocket, state, commonName,
+                         "Could not authenticate client.", *err);
+    return;
+  }
+
+  logzy::info("Finding current client's data.");
+  auto sessData = waitForSessionData(state, commonName, *clientSocket);
+  if (!sessData) {
+    FAIL_CLIENTSIDE_AUTH(clientSocket, state, commonName,
+                         "Couldn't match client and server", "");
+    return;
+  }
+
+  logzy::info("Could match client and server");
+  auto &[clientData, serverData] = *sessData;
+
+  auto serverPublicKey = serverData.info.serviceCertificate.getPublicKey();
+  if (!serverPublicKey) {
+    FAIL_CLIENTSIDE_AUTH(clientSocket, state, commonName,
+                         "Couldn't parse server's certificate.",
+                         serverPublicKey.error());
+    return;
+  }
+
+  auto clientPublicKey = clientData.info.publicCertificate.getPublicKey();
+  if (!clientPublicKey) {
+    FAIL_CLIENTSIDE_AUTH(clientSocket, state, commonName,
+                         "Couldn't parse client's certificate.",
+                         clientPublicKey.error());
+    return;
+  }
+
+  auto clientSocketShared = clientData.clientSocket.lock();
+  if (!clientSocketShared) {
+    logzy::error("Couldn't lock client's socket");
+    return;
+  }
+
+  logzy::info("Finalizing the handshake");
+  if (auto err = protocol::finalizeHandshake(
+          *clientSocketShared, *serverData.serviceSocket, *clientPublicKey,
+          *serverPublicKey)) {
+
+    FAIL_CLIENTSIDE_AUTH(clientSocket, state, commonName,
+                         "Couldn't finalize handshake.", *err);
+    return;
+  }
+  logzy::info("Handshake done. Session established.");
+}
+
+void serviceAuthenticate(std::shared_ptr<network::TcpSocket> &clientSocket,
+                         TtpState &state, std::string_view serviceName) {
+  logzy::info("Authenticating service {}", serviceName);
+
+  if (!clientSocket->isHealthy()) {
+    logzy::error("Service's socket is in invalid state. Couldn't authenticate");
+    return;
+  }
+
+  auto sessionInfo = protocol::authenticateService(state.data.certificate,
+                                                   *clientSocket.get());
+  if (!sessionInfo) {
+    network::sendError(*clientSocket.get(), "Could not authenticate server");
+    logzy::error("Authentcation of server failed. {}", sessionInfo.error());
+    return;
+  }
+
+  logzy::info("Service certificates validated.");
+
+  auto clientCn = sessionInfo->clientCertificate.getCommonName();
+
+  if (!clientCn) {
+    network::sendError(*clientSocket.get(),
+                       "Could not create session - extraction of common "
+                       "name from client's certificate failed");
+    logzy::error("No common name in client. {}", clientCn.error());
+    return;
+  }
+
+  {
+    std::lock_guard lock{state.mutex};
+
+    PendingSession sess{.info = std::move(sessionInfo).value(),
+                        .serviceSocket = clientSocket};
+
+    state.pendingSessions.emplace(*clientCn, std::move(sess));
+  }
+
+  logzy::info("Notifying user to proceed with authentication");
+
+  auto userSocket = state.connectedClients.find(*clientCn);
+  if (userSocket == state.connectedClients.end()) {
+    network::sendError(*clientSocket.get(), "Client is not connected to TTP");
+    logzy::error("Client not connected to ttp.");
+    return;
+  }
+
+  if (auto sock = userSocket->second.clientSocket.lock()) {
+    if (auto err = protocol::notifyClient(*sock, state.data.key, *clientCn,
+                                          serviceName)) {
+      network::sendError(*clientSocket, "Couldn't notify client");
+      logzy::error("Couldn't notify client");
+      return;
+    }
+  }
+  logzy::info("Service authenticated");
+}
 
 void handleClientConnection(network::TcpSocket clientSocketRaw,
                             std::string_view clientName, TtpState &state) {
@@ -79,118 +276,53 @@ void handleClientConnection(network::TcpSocket clientSocketRaw,
   std::string commonName;
   protocol::ClientRole role = protocol::ClientRole::Requester;
 
-  if (auto info = protocol::handleRegister(
-          state.ttpCertificate, *clientSocket.get(), state.ttpPrivateKey)) {
+  while (true) {
+    logzy::info(
+        "Waiting for client to request certificate or begin authentication");
 
-    ClientData data{.info = std::move(*info),
-                    .clientSocket = std::weak_ptr{clientSocket}};
-    commonName = data.info.commonName;
-    role = data.info.role;
-    state.connectedClients.emplace(data.info.commonName, std::move(data));
-  } else {
-    logzy::error("Registering {} failed. {}", clientName, info.error());
-    return;
-  }
-
-  if (role == protocol::ClientRole::Requester) {
-    if (auto err = protocol::authenticateClient(state.ttpCertificate,
-                                                *clientSocket.get())) {
-      failClientsideAuth(*clientSocket.get(), state, commonName,
-                         "Could not authenticate client.", *err);
+    auto packet = clientSocket->receive();
+    if (!packet) {
+      logzy::error("Erro when  receving packet");
+      return;
+    }
+    if (packet->type == network::PacketType::CloseConnection) {
+      logzy::warn("Client closed connection");
       return;
     }
 
-    logzy::trace("Getting client ot finalize");
-    ClientData &clientData = state.connectedClients.at(commonName);
-
-    logzy::trace("Getting server for client ot finalize");
-    PendingSession &serverData = state.pendingSessions.at(commonName);
-
-    auto serverPublicKey = serverData.info.serviceCertificate.getPublicKey();
-    if (!serverPublicKey) {
-      failClientsideAuth(*clientSocket.get(), state, commonName,
-                         "Couldn't parse server's certificate.",
-                         serverPublicKey.error());
+    if (packet->type == network::PacketType::CertificateRequest) {
+      certificateRequest(clientSocket, packet->payload, state.data);
+      // Certificate request temrinates the connection, for verification client
+      // should connect second time
       return;
     }
-
-    auto clientPublicKey = clientData.info.publicCertificate.getPublicKey();
-    if (!clientPublicKey) {
-      failClientsideAuth(*clientSocket.get(), state, commonName,
-                         "Couldn't parse client's certificate.",
-                         clientPublicKey.error());
-      return;
-    }
-
-    if (auto err =
-            protocol::finalizeHandshake(*clientData.clientSocket.lock().get(),
-                                        *serverData.serviceSocket.lock().get(),
-                                        *clientPublicKey, *serverPublicKey)) {
-
-      failClientsideAuth(*clientSocket.get(), state, commonName,
-                         "Couldn't finalize handshake.", *err);
-      return;
-    }
-    logzy::info("Handshake done.");
-  } else {
-    while (true) {
-
-      if (!clientSocket->isHealthy()) {
-        break;
+    if (packet->type == network::PacketType::InitiateAuth) {
+      auto res = initiateAuth(clientSocket, packet->payload, state);
+      if (!res) {
+        return;
       }
-
-      auto sessionInfo = protocol::authenticateService(state.ttpCertificate,
-                                                       *clientSocket.get());
-      if (!sessionInfo) {
-        network::sendError(*clientSocket.get(),
-                           "Could not authenticate server");
-        logzy::error("Authentcation of server failed. {}", sessionInfo.error());
-        continue;
-      }
-
-      auto clientCn = sessionInfo->clientCertificate.getCommonName();
-
-      if (!clientCn) {
-        network::sendError(*clientSocket.get(),
-                           "Could not create session - extraction of common "
-                           "name from client's certificate failed");
-        logzy::error("No common name in client. {}", clientCn.error());
-        continue;
-      }
-
-      {
-        std::lock_guard lock{state.mutex};
-
-        PendingSession sess{.info = std::move(sessionInfo).value(),
-                            .serviceSocket = std::weak_ptr{clientSocket}};
-
-        state.pendingSessions.emplace(*clientCn, std::move(sess));
-      }
-
-      auto userSocket = state.connectedClients.find(*clientCn);
-      if (userSocket == state.connectedClients.end()) {
-        network::sendError(*clientSocket.get(),
-                           "Client is not connected to TTP");
-        logzy::error("Client not connected to ttp.");
-        continue;
-      }
-
-      if (auto sock = userSocket->second.clientSocket.lock()) {
-        if (auto err = protocol::notifyClient(*sock.get(), state.ttpPrivateKey,
-                                              *clientCn, commonName)) {
-          network::sendError(*clientSocket.get(), "Couldn't notify client");
-          logzy::error("Couldn't notify client");
-          continue;
-        }
-      }
+      role = res->first;
+      commonName = std::move(res->second);
+      break;
     }
   }
 
-  logzy::trace("Connection with {} ended", clientName);
-  logzy::trace("state.pendingSessions.size() = {}",
-               state.pendingSessions.size());
-  logzy::trace("state.loggedClients.size() = {}",
-               state.connectedClients.size());
+  std::string_view roleString =
+      (role == protocol::ClientRole::Requester) ? "Requester" : "Service";
+  logzy::info("Authenticating {} with client: '{}'", roleString, commonName);
+
+  switch (role) {
+  case protocol::ClientRole::Requester:
+    requesterAuthenticate(clientSocket, state, commonName);
+    break;
+  case protocol::ClientRole::Service:
+    serviceAuthenticate(clientSocket, state, commonName);
+    break;
+  }
+
+  logzy::info("Connection with {} terminated", commonName);
+  logzy::debug("Pending session left: {}", state.pendingSessions.size());
+  logzy::trace("Connected clients left: {}", state.connectedClients.size());
 }
 
 } // namespace
@@ -206,15 +338,15 @@ auto main(int argc, const char *const *const argv) -> int {
   TtpState state{};
 
   if (auto keyResult = crypto::RsaKeyPair::generate()) {
-    state.ttpPrivateKey = std::move(*keyResult);
+    state.data.key = std::move(*keyResult);
   } else {
     logzy::critical("Couldn't generate TTP's RSA key pair");
     return EXIT_FAILURE;
   }
 
   if (auto x509Result = crypto::X509Certificate::createSelfSignedCA(
-          "Trusted Third Party", state.ttpPrivateKey)) {
-    state.ttpCertificate = std::move(*x509Result);
+          "Trusted Third Party", state.data.key)) {
+    state.data.certificate = std::move(*x509Result);
   } else {
     logzy::error("Couldn't create Self signed X509 certificate. {}",
                  x509Result.error());
@@ -223,7 +355,7 @@ auto main(int argc, const char *const *const argv) -> int {
 
   // udmping cert to file
 
-  if (auto err = state.ttpCertificate.saveToFile(protocol::TTP_CERT_PATH)) {
+  if (auto err = state.data.certificate.saveToFile(protocol::TTP_CERT_PATH)) {
     logzy::error("{}", *err);
     return EXIT_FAILURE;
   }
@@ -234,7 +366,6 @@ auto main(int argc, const char *const *const argv) -> int {
     return EXIT_FAILURE;
   }
 
-  std::vector<std::jthread> threadHandles;
   int clientCounter = 0;
   while (true) {
     logzy::info("Waiting for connection");
@@ -242,8 +373,9 @@ auto main(int argc, const char *const *const argv) -> int {
     if (auto client = server.accept()) {
 
       std::string clientName = "Client " + std::to_string(++clientCounter);
-      threadHandles.emplace_back(handleClientConnection, std::move(*client),
-                                 clientName, std::ref(state));
+      std::thread(handleClientConnection, std::move(*client), clientName,
+                  std::ref(state))
+          .detach();
 
     } else {
       logzy::error("Couldn't accept client's connection");

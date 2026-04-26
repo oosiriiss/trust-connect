@@ -28,7 +28,7 @@ constexpr std::string_view SessionKey = "session_key";
 
 struct TtpData {
   crypto::X509Certificate certificate;
-  crypto::RsaKeyPair publicKey;
+  crypto::RsaKeyPair key;
 
   //[[nodiscard]] auto fromFile(std::string_view path)
   //    -> std::expected<TtpData, std::string>;
@@ -39,11 +39,14 @@ enum class ClientRole : std::uint8_t { Requester = 0, Service = 1 };
 [[nodiscard]] auto loadTtpData(std::string_view path = TTP_CERT_PATH)
     -> std::expected<TtpData, std::string>;
 
-[[nodiscard]] auto registerWithTtp(network::TcpSocket &socket,
-                                   const crypto::Hash32 &id,
-                                   const crypto::RsaKeyPair &clientKey,
-                                   const TtpData &ttpData, ClientRole role)
+[[nodiscard]] auto
+obtainCertificate(network::TcpSocket &ttpSocket, std::string_view id,
+                  const crypto::RsaKeyPair &clientKey, const TtpData &ttpData)
     -> std::expected<crypto::X509Certificate, std::string>;
+
+auto initiateAuthentication(network::TcpSocket &ttpSocket,
+                            crypto::X509Certificate &clientCertificate,
+                            ClientRole role) -> std::optional<std::string>;
 
 auto clientEstablishSession() -> std::expected<crypto::Aes256, std::string>;
 auto serverEstablishSession() -> std::expected<crypto::Aes256, std::string>;
@@ -89,9 +92,13 @@ struct SessionInfo {
   crypto::X509Certificate clientCertificate;
 };
 
-auto handleRegister(crypto::X509Certificate &ttpCertificate,
-                    network::TcpSocket &client,
-                    const crypto::RsaKeyPair &ttpKey)
+auto handleObtainCertificate(network::TcpSocket &client,
+                             nlohmann::json &rawPayload, TtpData &ttpData
+
+                             ) -> std::optional<std::string>;
+
+auto handleInitiateAuthentication(network::TcpSocket &clientSocket,
+                                  nlohmann::json &rawPayload, TtpData &ttpData)
     -> std::expected<ClientInfo, std::string>;
 
 auto authenticateClient(crypto::X509Certificate &ttpCertificate,

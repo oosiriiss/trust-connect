@@ -10,6 +10,8 @@ namespace network {
 enum class PacketType : std::int8_t {
   CertificateRequest,
   CertificateResponse,
+  InitiateAuth,
+  InitiateAuthOk,
   ServiceRequest,
   ServerAuthRequest,
   ServerAuthOk,
@@ -63,9 +65,10 @@ template <> struct std::formatter<network::PacketType> {
   static auto format(const network::PacketType t, std::format_context &ctx) {
     using Type = network::PacketType;
     static std::unordered_map<Type, const char *> mappings{
-
         {Type::CertificateRequest, "CertificateRequest"},
         {Type::CertificateResponse, "CertificateResponse"},
+        {Type::InitiateAuth, "InitiateAuth"},
+        {Type::InitiateAuthOk, "InitiateAuthOk"},
         {Type::ServiceRequest, "ServiceRequest"},
         {Type::ServerAuthRequest, "ServerAuthRequest"},
         {Type::ServerAuthOk, "ServerAuthOk"},
