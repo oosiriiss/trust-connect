@@ -3,13 +3,13 @@
 #include "GLFW/glfw3.h"
 #include "constants.hpp"
 #include "crypto/rsa.hpp"
+#include "network/socket.hpp"
 #include <cstdint>
 #include <optional>
 #include <string>
 
 struct AppContext {
   GLFWwindow *window{nullptr};
-
   crypto::RsaKeyPair rsaKey{};
 };
 
