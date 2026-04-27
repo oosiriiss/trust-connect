@@ -263,7 +263,11 @@ void serviceAuthenticate(std::shared_ptr<network::TcpSocket> &clientSocket,
       logzy::error("Couldn't notify client");
       return;
     }
+  } else {
+    network::sendError(*clientSocket, "Client disconnected");
+    logzy::error("Couldn't notify client");
   }
+
   logzy::info("Service authenticated");
 }
 
@@ -317,6 +321,26 @@ void handleClientConnection(network::TcpSocket clientSocketRaw,
     break;
   case protocol::ClientRole::Service:
     serviceAuthenticate(clientSocket, state, commonName);
+    break;
+  }
+
+  // Cleanup
+  switch (role) {
+  case protocol::ClientRole::Requester:
+    logzy::info("Cleaning client's connection");
+    if (state.connectedClients.erase(commonName) == 0) {
+      logzy::warn("No connected client with name {} found", commonName);
+    }
+    logzy::info("Cleaning session");
+    if (state.pendingSessions.erase(commonName) == 0) {
+      logzy::warn("No pending session for client {} found", commonName);
+    }
+    break;
+  case protocol::ClientRole::Service:
+    logzy::info("Cleaning server connection");
+    if (state.connectedClients.erase(commonName) == 0) {
+      logzy::warn("No connected server with name {} found", commonName);
+    }
     break;
   }
 
