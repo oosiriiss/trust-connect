@@ -32,6 +32,7 @@ void handleDataRequest(network::TcpSocket &clientSocket,
     return;
   }
 
+  logzy::info("Received data request with encrypted content: {}", data);
   logzy::debug("Decrypting user data.");
   std::string message;
   if (auto decResult = crypto::decodeAndDecrypt(data, sessionKey)) {
@@ -41,7 +42,7 @@ void handleDataRequest(network::TcpSocket &clientSocket,
     return;
   }
   logzy::debug("Decrypted");
-  logzy::trace("Decrypted data = {}", message);
+  logzy::info("Decrypted data = {}", message);
 
   message += " Hello, bonus from server";
 
@@ -53,6 +54,7 @@ void handleDataRequest(network::TcpSocket &clientSocket,
     logzy::error("Couldn't encryprt message. {}", encResult.error());
     return;
   }
+  logzy::info("Replying with: {}", message);
 
   if (auto err = clientSocket.send(
           network::Packet{.type = network::PacketType::DataResponse,
@@ -60,8 +62,7 @@ void handleDataRequest(network::TcpSocket &clientSocket,
     logzy::error("Couldn't respond to the client. {}", *err);
     return;
   }
-
-  logzy::info("Data request handled.");
+  logzy::info("Reply success");
 }
 
 auto registerAndGetCertificate(network::TcpSocket &ttpSocket, AppContext &ctx,
