@@ -2,6 +2,7 @@
 #include "network/socket.hpp"
 #include "debug_utils.hpp"
 #include "logzy/logzy.hpp"
+#include "network/network.hpp"
 #include "network/packet.hpp"
 #include <arpa/inet.h>
 #include <asm-generic/socket.h>
@@ -89,7 +90,14 @@ auto TcpSocket::connect(const std::string &host, std::uint16_t port) noexcept
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_port = htons(port);
-  inet_pton(addr.sin_family, host.c_str(), &addr.sin_addr);
+
+  auto hostResolved = ipFromHost(host);
+  if (!hostResolved) {
+    return std::unexpected(
+        std::format("Couldn't resolve host name. {}", hostResolved.error()));
+  }
+
+  inet_pton(addr.sin_family, hostResolved->c_str(), &addr.sin_addr);
 
   std::expected<TcpSocket, std::string> socket{TcpSocket{}};
 
@@ -97,17 +105,19 @@ auto TcpSocket::connect(const std::string &host, std::uint16_t port) noexcept
 
   if (socket->fd_ < 0) {
     return std::unexpected(
-        std::format("Couldnt' create a socket for {}:{}", host, port));
+        std::format("Couldnt' create a socket for host {} IP='{}:{}'", host,
+                    *hostResolved, port));
   }
 
   if (::connect(socket->fd_,
                 reinterpret_cast<struct sockaddr *>(&addr), // NOLINT
                 sizeof(addr)) != 0) {
-    return std::unexpected(
-        std::format("Couldn't connect to {}:{}", host, port));
+    return std::unexpected(std::format("Couldn't connect to host {} IP='{}:{}'",
+                                       host, *hostResolved, port));
   }
 
-  logzy::trace("Client connected to {}:{}", host, port);
+  logzy::trace("Client connected to host {} IP='{}:{}'", host, *hostResolved,
+               port);
   return socket;
 }
 

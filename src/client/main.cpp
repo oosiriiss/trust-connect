@@ -113,8 +113,9 @@ void connectToServer(AppState &state, const std::string &host,
     logzy::error("Couldn't conneect to server. {}", serverSocket.error());
     state.errors.emplace_back(
         std::format("Couldn't conneect to server. {}", serverSocket.error()));
+    return;
   }
-  state.serverSocket = std::move(*serverSocket);
+  state.serverSocket = std::move(serverSocket).value();
 }
 
 void baseUi(AppState &state, cli::client::ClientArguments &args) {

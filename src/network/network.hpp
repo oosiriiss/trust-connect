@@ -10,6 +10,9 @@ namespace keys {
 constexpr std::string_view ErrorMessage = "error_message";
 } // namespace keys
 
+auto ipFromHost(const std::string &host)
+    -> std::expected<std::string, std::string>;
+
 /**
  * @brief Creates a TCP connection to the @p host @p:@p port @p
  *

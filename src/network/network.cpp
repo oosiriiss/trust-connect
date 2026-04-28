@@ -1,8 +1,51 @@
 #include "network.hpp"
+#include "debug_utils.hpp"
 #include "logzy/logzy.hpp"
 #include "network/packet.hpp"
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <system_error>
 
 namespace network {
+
+auto ipFromHost(const std::string &host)
+    -> std::expected<std::string, std::string> {
+  logzy::debug("Resolving hostname: {}", host);
+  struct addrinfo hints{.ai_family = AF_INET, .ai_socktype = SOCK_STREAM};
+  struct addrinfo *result = nullptr;
+
+  if (int status = getaddrinfo(host.c_str(), nullptr, &hints, &result);
+      status != 0) {
+    return std::unexpected(std::format("{}", host, gai_strerror(status)));
+  }
+
+  if (result == nullptr) {
+    return std::unexpected(std::format("Result was null", host));
+  }
+
+  if (result->ai_next != nullptr) {
+    return std::unexpected(std::format("Multiple addresses found", host));
+  }
+
+  DEBUG_ASSERT(result->ai_family == AF_INET, "Found address should be IPv4");
+
+  auto *ipv4 = reinterpret_cast<struct sockaddr_in *>(result->ai_addr);
+  auto *rawIpv4Address = &ipv4->sin_addr;
+
+  std::array<char, INET_ADDRSTRLEN> buffer{};
+  if (inet_ntop(result->ai_family, rawIpv4Address, buffer.data(),
+                buffer.size()) == nullptr) {
+    return std::unexpected(std::format("Conversion to human format failed. {}",
+                                       std::system_category().message(errno)));
+  }
+
+  std::expected<std::string, std::string> humanReadableIp{
+      std::string{buffer.data(), buffer.size()}};
+
+  return humanReadableIp;
+}
 
 auto connectTo(const std::string &host, std::uint16_t port,
                std::string_view targetName)
