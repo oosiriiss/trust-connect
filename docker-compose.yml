@@ -6,20 +6,42 @@ services:
       args:
         TARGET_NAME: ttp-app
     container_name: ttp
+    volumes:
+      - ttp-cert:/public-certs
     ports:
       - "6601:6600"
-    command: ["./appexe", "--port=6600"]
-
+    command: >
+          sh -c "
+          rm -rf /public-certs/* &&
+          ./appexe --port 6600 & 
+          while [ ! -f ./ttp.cert ]; do sleep 1; done && 
+          cp ./ttp.cert /public-certs && 
+          wait"
+    healthcheck:
+      test: ["CMD", "test", "-f", "/public-certs/ttp.cert"]
+      interval: 2s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
   server:
     build:
       context: .
       dockerfile: docker/Dockerfile
       args:
         TARGET_NAME: server-app
+    volumes:
+      - ttp-cert:/public-certs
     container_name: server
     ports:
       - "6600:6600"
     depends_on:
       ttp:
-        condition: service_started 
-    command: ["./appexe", "--port=6600"]
+        condition: service_healthy
+    command: sh -c "cp /public-certs/ttp.cert . && ./appexe --port=6600 --ttp-ip ttp --ttp-port 6600"
+
+
+volumes:
+  ttp-cert:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
