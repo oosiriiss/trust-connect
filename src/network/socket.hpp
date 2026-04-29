@@ -83,7 +83,7 @@ public:
    *
    * This function is same as calling Packet::setTimeout(0)
    *
-   * @return 
+   * @return
    * - Success: std::nullopt
    * - Error: String error message
    */
@@ -126,7 +126,6 @@ private:
 };
 
 struct TcpServer {
-  static constexpr int MAX_CONNECTIONS = 4;
 
 public:
   TcpServer() = default;

@@ -11,6 +11,7 @@
 #include "network/socket.hpp"
 #include "server/cli.hpp"
 #include <cstdlib>
+#include <thread>
 #include <unistd.h>
 
 namespace {
@@ -99,8 +100,7 @@ auto registerAndGetCertificate(network::TcpSocket &ttpSocket, AppContext &ctx,
   return true;
 }
 
-void clientSession(network::TcpSocket &clientSocket,
-                   crypto::Aes256 &sessionKey) {
+void clientSession(network::TcpSocket clientSocket, crypto::Aes256 sessionKey) {
 
   while (true) {
     auto packet = clientSocket.receive();
@@ -120,6 +120,54 @@ void clientSession(network::TcpSocket &clientSocket,
 
     handleDataRequest(clientSocket, packet->payload, sessionKey);
   }
+}
+
+void handleConnection(network::TcpSocket &&clientSocket,
+                      const std::string &ttpHostname,
+                      const std::uint16_t ttpPort,
+                      const crypto::RsaKeyPair &serverPrivateKey,
+                      const crypto::X509Certificate &serverCertificate) {
+
+  logzy::info("Waiting for client to request service");
+
+  auto payload =
+      network::expectPacket(clientSocket, network::PacketType::ServiceRequest);
+  if (!payload) {
+    logzy::error("Couldn't ceveive. {}", payload.error());
+    return;
+  }
+
+  logzy::info("Client sent packet. Connecting to TTP");
+
+  auto ttpSocket =
+      network::connectTo(ttpHostname, ttpPort, "Trusted third party");
+  if (!ttpSocket) {
+    network::sendError(clientSocket, "Server couldn't connect to TTP");
+    logzy::error("Connecting to TTP failed. {}", ttpSocket.error());
+    return;
+  }
+  logzy::info("Initiating authentication with TTP");
+
+  if (auto err = protocol::initiateAuthentication(
+          *ttpSocket, serverCertificate, protocol::ClientRole::Service)) {
+    network::sendError(clientSocket,
+                       "Server couldn't initiate authentication with TTP");
+    logzy::error("Couldn't initiate atuhentication with TTP. {}", *err);
+    return;
+  }
+
+  logzy::info("Performing server handshake");
+
+  auto sessionKey = protocol::serverHandshake(
+      *ttpSocket, *payload, serverPrivateKey, serverCertificate);
+  if (!sessionKey) {
+    network::sendError(clientSocket, "Server authentication failed");
+    logzy::error("Couldn't estaiblsih connection. {}", sessionKey.error());
+    return;
+  }
+
+  logzy::info("Handshake complete. Secure session established.");
+  clientSession(std::move(clientSocket), std::move(sessionKey).value());
 }
 
 } // namespace
@@ -174,43 +222,22 @@ auto main(int argc, const char *const *const argv) -> int {
 
   logzy::info("Bound");
 
-  logzy::info("Waiting for 1 client to connect");
-  auto clientSocket = server.accept();
-  logzy::info("Client connected");
-
-  crypto::Aes256 sessionKey;
-
   while (true) {
 
-    auto payload = clientSocket->receive();
-    if (!payload) {
-      logzy::error("Couldn't ceveive. {}", payload.error());
-    }
+    logzy::info("Waiting for client to connect");
+    auto clientSocket = server.accept();
+    logzy::info("Client connected");
 
-    ttpSocket =
-        network::connectTo(args->ttpIp, args->ttpPort, "Trusted third party");
-    if (!ttpSocket) {
-      logzy::error("Connecting to TTP failed. {}", ttpSocket.error());
-      break;
-    }
-
-    if (auto err = protocol::initiateAuthentication(
-            *ttpSocket, ctx.serverCertificate, protocol::ClientRole::Service)) {
-      logzy::error("Couldn't initiate atuhentication with TTP. {}", *err);
-      break;
-    }
-
-    if (auto sessKey =
-            protocol::serverHandshake(*ttpSocket, payload->payload,
-                                      ctx.serverKey, ctx.serverCertificate)) {
-      sessionKey = std::move(sessKey).value();
-    } else {
-      network::sendError(*clientSocket, "Server authentication failed");
-      logzy::error("Couldn't estaiblsih connection. {}", sessKey.error());
+    if (!clientSocket) {
+      logzy::error("Accepting client connection failed. {}",
+                   clientSocket.error());
       continue;
     }
 
-    clientSession(*clientSocket, sessionKey);
+    std::thread(handleConnection, std::move(clientSocket).value(),
+                std::cref(args->ttpIp), args->ttpPort, std::cref(ctx.serverKey),
+                std::cref(ctx.serverCertificate))
+        .detach();
   }
 
   return EXIT_SUCCESS;

@@ -302,7 +302,7 @@ void TcpServer::close() noexcept { closeSocket(fd_); }
 
   logzy::trace("Server socket bound");
 
-  if (::listen(fd_, MAX_CONNECTIONS) != 0) {
+  if (::listen(fd_, SOMAXCONN) != 0) {
     return std::optional(std::format("Listen failed. err: {}",
                                      std::system_category().message(errno)));
   }

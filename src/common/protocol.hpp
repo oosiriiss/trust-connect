@@ -92,7 +92,7 @@ obtainCertificate(network::TcpSocket &ttpSocket, std::string_view id,
  * - Error: String error message
  */
 auto initiateAuthentication(network::TcpSocket &ttpSocket,
-                            crypto::X509Certificate &clientCertificate,
+                            const crypto::X509Certificate &clientCertificate,
                             ClientRole role) -> std::optional<std::string>;
 
 /**

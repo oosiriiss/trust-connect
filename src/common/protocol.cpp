@@ -46,8 +46,9 @@ auto loadTtpData(std::string_view path) -> std::expected<TtpData, std::string> {
 }
 
 auto initiateAuthentication(network::TcpSocket &ttpSocket,
-                            crypto::X509Certificate &clientCertificate,
-                            ClientRole role) -> std::optional<std::string> {
+                            const crypto::X509Certificate &clientCertificate,
+                            const ClientRole role)
+    -> std::optional<std::string> {
   logzy::debug("Initiating authentication");
 
   auto certificatePem = clientCertificate.toPem();
