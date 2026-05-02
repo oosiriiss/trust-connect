@@ -16,7 +16,7 @@ fi
 
 echo "---"
 
-TTP_HEALTHCHECK_COMMAND="`docker inspect -f {{.State.Health.Status}} $TTP_CONTAINER_NAME`"
+TTP_HEALTHCHECK_COMMAND="$(docker inspect -f {{.State.Health.Status}} $TTP_CONTAINER_NAME)"
 echo "Checking if $TTP_CONTAINER_NAME container is healthy with command: '$TTP_HEALTHCHECK_COMMAND'"
 if [ $TTP_HEALTHCHECK_COMMAND != "healthy" ]; then
    echo "$TTP_CONTAINER_NAME is not healthy. Couldn't download the certificate"
