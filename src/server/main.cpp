@@ -33,8 +33,9 @@ void handleDataRequest(network::TcpSocket &clientSocket,
     return;
   }
 
-  logzy::info("Received data request with encrypted content: {}", data);
+  logzy::trace("Received data request with encrypted content: {}", data);
   logzy::debug("Decrypting user data.");
+
   std::string message;
   if (auto decResult = crypto::decodeAndDecrypt(data, sessionKey)) {
     message = std::move(*decResult);
@@ -43,19 +44,18 @@ void handleDataRequest(network::TcpSocket &clientSocket,
     return;
   }
   logzy::debug("Decrypted");
-  logzy::info("Decrypted data = {}", message);
+  logzy::trace("Decrypted data = {}", message);
 
   message += " Hello, bonus from server";
 
   logzy::debug("Encrypting the return message.");
-  logzy::trace("Return message = {}", message);
   if (auto encResult = crypto::encryptAndEncode(message, sessionKey)) {
     message = std::move(*encResult);
   } else {
     logzy::error("Couldn't encryprt message. {}", encResult.error());
     return;
   }
-  logzy::info("Replying with: {}", message);
+  logzy::debug("Replying");
 
   if (auto err = clientSocket.send(
           network::Packet{.type = network::PacketType::DataResponse,
@@ -63,12 +63,14 @@ void handleDataRequest(network::TcpSocket &clientSocket,
     logzy::error("Couldn't respond to the client. {}", *err);
     return;
   }
-  logzy::info("Reply success");
+  logzy::debug("User data request handled");
 }
 
 auto registerAndGetCertificate(network::TcpSocket &ttpSocket, AppContext &ctx,
                                protocol::TtpData &ttpData,
                                bool falsifyCertificate) -> bool {
+
+  logzy::info("Obtaining certificate from TTP");
 
   if (auto cert = protocol::obtainCertificate(
           ttpSocket, crypto::hashToHex(ctx.id), ctx.serverKey, ttpData)) {
@@ -96,11 +98,14 @@ auto registerAndGetCertificate(network::TcpSocket &ttpSocket, AppContext &ctx,
         cert.error());
     return false;
   }
+  logzy::info("Certificate obtained. CA={}",
+              ctx.serverCertificate.getCommonNameSafe());
 
   return true;
 }
 
 void clientSession(network::TcpSocket clientSocket, crypto::Aes256 sessionKey) {
+  logzy::info("Session with client fd={} started", clientSocket.getFd());
 
   while (true) {
     auto packet = clientSocket.receive();
@@ -120,6 +125,7 @@ void clientSession(network::TcpSocket clientSocket, crypto::Aes256 sessionKey) {
 
     handleDataRequest(clientSocket, packet->payload, sessionKey);
   }
+  logzy::info("Client session with fd={} ended", clientSocket.getFd());
 }
 
 void handleConnection(network::TcpSocket &&clientSocket,
@@ -127,8 +133,8 @@ void handleConnection(network::TcpSocket &&clientSocket,
                       const std::uint16_t ttpPort,
                       const crypto::RsaKeyPair &serverPrivateKey,
                       const crypto::X509Certificate &serverCertificate) {
-
-  logzy::info("Waiting for client to request service");
+  logzy::debug("Waiting for client fd={} to request service",
+               clientSocket.getFd());
 
   auto payload =
       network::expectPacket(clientSocket, network::PacketType::ServiceRequest);
@@ -136,8 +142,7 @@ void handleConnection(network::TcpSocket &&clientSocket,
     logzy::error("Couldn't ceveive. {}", payload.error());
     return;
   }
-
-  logzy::info("Client sent packet. Connecting to TTP");
+  logzy::info("Client with fd={} requested service", clientSocket.getFd());
 
   auto ttpSocket =
       network::connectTo(ttpHostname, ttpPort, "Trusted third party");
@@ -174,6 +179,7 @@ void handleConnection(network::TcpSocket &&clientSocket,
 
 auto main(int argc, const char *const *const argv) -> int {
 
+  logzy::info("Parsing commandline arguments");
   auto args =
       cli::parseCommandlineArgs<cli::server::ServerArguments>(argc, argv);
   if (!args) {
@@ -191,17 +197,20 @@ auto main(int argc, const char *const *const argv) -> int {
   }
   logzy::info("ID generated: {}", crypto::hashToHex(ctx.id));
 
+  logzy::info("Connecting to TTP");
   auto ttpSocket = network::connectTo(args->ttpIp, args->ttpPort, "TTP");
   if (!ttpSocket) {
     logzy::critical("Couldn't connect to TTP. {}", ttpSocket.error());
     return EXIT_FAILURE;
   }
 
+  logzy::info("Loading TTP data");
   auto ttpData = protocol::loadTtpData();
   if (!ttpData) {
     logzy::critical("Couldn't load TTP data. {}", ttpData.error());
     return EXIT_FAILURE;
   }
+  logzy::info("Generating private RSA keypair");
   if (auto keyResult = crypto::RsaKeyPair::generate()) {
     ctx.serverKey = std::move(*keyResult);
   } else {
@@ -220,13 +229,13 @@ auto main(int argc, const char *const *const argv) -> int {
     return EXIT_FAILURE;
   }
 
-  logzy::info("Bound");
+  logzy::info("Server is running at port: {}", args->bindPort);
 
   while (true) {
 
     logzy::info("Waiting for client to connect");
     auto clientSocket = server.accept();
-    logzy::info("Client connected");
+    logzy::info("Client connected fd={}", clientSocket->getFd());
 
     if (!clientSocket) {
       logzy::error("Accepting client connection failed. {}",
