@@ -23,17 +23,17 @@ static void glfwKeyCallback(GLFWwindow *window, int key, int /*scancode*/,
   }
 }
 
-namespace {} // namespace
-
 [[nodiscard]] auto initialize() noexcept -> std::optional<AppContext> {
   std::optional<AppContext> ctx{AppContext{}};
 
+  logzy::debug("Initializng GLFW");
   glfwSetErrorCallback(glfwErrorCallback);
   if (glfwInit() == 0) {
     logzy::critical("Couldnt' initialize glfw");
     return std::nullopt;
   }
 
+  logzy::debug("Creating window OpenGL context");
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE); // 3.2+
@@ -47,11 +47,13 @@ namespace {} // namespace
     return std::nullopt;
   }
 
+  logzy::debug("Setting GLFW-related callbacks and options");
   glfwMakeContextCurrent(ctx->window);
   glfwSwapInterval(1);
   glfwSetKeyCallback(ctx->window, glfwKeyCallback);
   gladLoadGL(glfwGetProcAddress);
 
+  logzy::debug("Initializng Dear ImGui");
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGuiIO &io = ImGui::GetIO();
@@ -66,6 +68,7 @@ namespace {} // namespace
   ImGui_ImplGlfw_InitForOpenGL(ctx->window, /*install_callbacks=*/true);
   ImGui_ImplOpenGL3_Init(GLSL_VERSION);
 
+  logzy::debug("Generating privat RSA keypair");
   if (auto keyRes = crypto::RsaKeyPair::generate()) {
     ctx->rsaKey = std::move(*keyRes);
   } else {
@@ -73,16 +76,20 @@ namespace {} // namespace
     return std::nullopt;
   }
 
+  logzy::debug("Initialized");
+
   return ctx;
 }
 
 void shutdown(AppContext &ctx) noexcept {
+  logzy::debug("Shutting down Dear ImGui");
 
   // Cleanup
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();
 
+  logzy::debug("Shutting down GLFW");
   glfwDestroyWindow(ctx.window);
   glfwTerminate();
 }

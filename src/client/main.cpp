@@ -62,8 +62,8 @@ struct AppState {
 
 void sendData(std::string_view data, network::TcpSocket &serverSocket,
               AppState &state) {
-  logzy::debug("Encrytping data with session key.");
-  logzy::info("Sending message: {}", data);
+  logzy::info("Trying to send message to server");
+  logzy::debug("Encrypting and encoding message");
 
   std::string encryptedData;
   if (auto encrypted = crypto::encryptAndEncode(data, state.sessionKey)) {
@@ -73,8 +73,7 @@ void sendData(std::string_view data, network::TcpSocket &serverSocket,
                  encrypted.error());
     return;
   }
-  logzy::info("Encrypted and encoded data: {}", encryptedData);
-  logzy::info("Sending encrtypted data to server.");
+  logzy::debug("Data encrypted and encoded");
   if (auto err = serverSocket.send(
           network::Packet{.type = network::PacketType::DataRequest,
                           .payload = {{"data", encryptedData}}})) {
@@ -83,7 +82,7 @@ void sendData(std::string_view data, network::TcpSocket &serverSocket,
   }
 
   state.sentMessages.emplace_back(data);
-  logzy::info("Waiting for response from server");
+  logzy::debug("Waiting for response from server");
 
   auto response =
       network::expectPacket(serverSocket, network::PacketType::DataResponse);
@@ -95,27 +94,28 @@ void sendData(std::string_view data, network::TcpSocket &serverSocket,
     return;
   }
 
-  logzy::info("Server replied with encoded: {}", receivedData);
-
+  logzy::trace("Server replied with encoded: {}", receivedData);
   if (auto decodedResult =
           crypto::decodeAndDecrypt(receivedData, state.sessionKey)) {
-    logzy::info("Decoded data = {}. Size=  {}", *decodedResult,
-                decodedResult->size());
     std::ranges::replace(*decodedResult, '\0', ' ');
     state.serverResponses.emplace_back(std::move(*decodedResult));
   }
+
+  logzy::info("Message sent");
 }
 
 void connectToServer(AppState &state, const std::string &host,
                      std::uint16_t port) {
+  logzy::info("Connecting to server");
   auto serverSocket = network::connectTo(host, port, "Server");
   if (!serverSocket) {
-    logzy::error("Couldn't conneect to server. {}", serverSocket.error());
+    logzy::error("Couldn't connect to server. {}", serverSocket.error());
     state.errors.emplace_back(
         std::format("Couldn't conneect to server. {}", serverSocket.error()));
     return;
   }
   state.serverSocket = std::move(serverSocket).value();
+  logzy::info("Connected");
 }
 
 void baseUi(AppState &state, cli::client::ClientArguments &args) {
@@ -149,10 +149,11 @@ void generateIdUi(AppState &state) {
         std::format("Couldn't generate user id: {}", id.error()));
   }
 
-  logzy::info("User id: {}", crypto::hashToHex(state.id));
   state.id = *id;
   state.stage = AppStage::ObtainCertificate;
   state.idGenerated = true;
+
+  logzy::info("User ID generated: {}", crypto::hashToHex(state.id));
 }
 
 void obtainCertificateUi(AppState &state,
@@ -174,7 +175,7 @@ void obtainCertificateUi(AppState &state,
     return;
   }
 
-  logzy::info("Connected");
+  logzy::info("Connected. Obtaining certificate.");
 
   auto cert = protocol::obtainCertificate(
       *ttpSocket, crypto::hashToHex(state.id), clientKey, ttpData);
@@ -205,6 +206,8 @@ void authenticateUi(AppState &state, const cli::client::ClientArguments &args,
     return;
   }
 
+  logzy::info("Authentication initiated. Connecting to TTP");
+
   auto ttpSocket =
       network::connectTo(args.ttpIp, args.ttpPort, "Trusted third party");
   if (!ttpSocket) {
@@ -226,14 +229,14 @@ void authenticateUi(AppState &state, const cli::client::ClientArguments &args,
   crypto::X509Certificate *activeCertificate =
       (state.useFakeCertificate) ? &fakeCertificate : &state.clientCertificate;
 
-  logzy::info("performing handshake");
+  logzy::info("Performing client handshake");
 
   auto sessionKey =
       protocol::clientHandshake(state.serverSocket, *ttpSocket,
                                 *activeCertificate, clientKey, ttpData.key);
 
   if (!sessionKey) {
-    logzy::error("{}", sessionKey.error());
+    logzy::error("Handshake failed. {}", sessionKey.error());
     state.errors.emplace_back(
         std::format("Couldn't perform handshake. {}", sessionKey.error()));
     return;
@@ -276,8 +279,10 @@ void authenticatedUi(AppState &state) {
 
 void errorsUi(AppState &state) {
   if (ImGui::Button("Clear errors")) {
+    logzy::info("Clearing errors");
     state.errors.clear();
   }
+
   ImGui::Text("Errors:");
   ImGui::BeginChild("Errors", ImVec2(0, 100), ImGuiChildFlags_None,
                     ImGuiWindowFlags_HorizontalScrollbar);
@@ -303,18 +308,20 @@ auto main(int argc, char const *const *const argv) -> int {
   AppContext ctx;
   AppState state{};
 
+  logzy::info("Initializng application");
   if (auto ctxOpt = initialize()) {
     ctx = std::move(*ctxOpt);
   }
 
+  logzy::info("Loading TTP data");
   auto ttpData = protocol::loadTtpData();
   if (!ttpData) {
     logzy::critical("Couldn't load TTP data. {}", ttpData.error());
     return EXIT_FAILURE;
   }
 
-  logzy::info("Loaded ttp key");
-
+  logzy::info(
+      "Creating self-signed certificate to use when using false certificate");
   auto falseCertificate = crypto::X509Certificate::createSelfSignedCA(
       "False certificate", ctx.rsaKey);
   if (!falseCertificate) {
@@ -357,7 +364,9 @@ auto main(int argc, char const *const *const argv) -> int {
     endFrame(ctx);
   }
 
+  logzy::info("Shutting down application");
   shutdown(ctx);
 
+  logzy::info("Exiting...");
   return 0;
 }
